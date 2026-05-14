@@ -152,7 +152,7 @@ ipcMain.handle('get-battery', async () => {
       )
     })
   } else {
-    // macOS/Linux dev fallback — return a realistic mock
+    // Dev fallback — return a realistic mock
     return { level: 78, charging: false, available: true }
   }
 })
@@ -246,5 +246,5 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })

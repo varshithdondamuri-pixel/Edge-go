@@ -17,7 +17,7 @@
   --color-success:#4ade80;
   --color-warning:#facc15;
   --color-danger:#f87171;
-  --font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  --font-family:'Inter', "Segoe UI", Roboto, sans-serif;
   --radius-pill:999px;
   --radius-lg:18px;
   --radius-md:12px;
