@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   expandWindow: (expanded) => ipcRenderer.send('expand-window', expanded),
   setWindowSize: (size) => ipcRenderer.send('set-window-size', size),
   setAlwaysOnTop: (value) => ipcRenderer.send('set-always-on-top', value),
+  setLaunchAtStartup: (value) => ipcRenderer.send('set-launch-at-startup', value),
   quit: () => ipcRenderer.send('quit-app'),
 
   // Events from main → renderer

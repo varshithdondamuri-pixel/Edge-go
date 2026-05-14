@@ -235,7 +235,10 @@ function SystemTab({ s, set }) {
     <>
       <Section title="Startup">
         <Row label="Launch at Startup" hint="Start with Windows">
-          <Toggle id="toggle-startup" value={s.launchAtStartup} onChange={v => set('launchAtStartup', v)} />
+          <Toggle id="toggle-startup" value={s.launchAtStartup} onChange={v => {
+            set('launchAtStartup', v)
+            if (window.electronAPI?.setLaunchAtStartup) window.electronAPI.setLaunchAtStartup(v)
+          }} />
         </Row>
       </Section>
 

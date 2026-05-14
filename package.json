@@ -18,6 +18,18 @@
       "target": "nsis",
       "icon": "public/icon.png"
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Edge Go",
+      "installerIcon": "public/icon.png",
+      "uninstallerIcon": "public/icon.png",
+      "uninstallDisplayName": "Edge Go",
+      "license": "EULA.txt",
+      "runAfterFinish": true
+    },
     "mac": {
       "target": "dmg",
       "icon": "public/icon.icns"
@@ -25,7 +37,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "public/**/*"
+      "public/**/*",
+      "assets/**/*"
     ],
     "directories": {
       "output": "release"

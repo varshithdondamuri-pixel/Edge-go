@@ -208,6 +208,13 @@ ipcMain.on('set-always-on-top', (_, value) => {
   mainWindow.setAlwaysOnTop(value, 'screen-saver', 1)
 })
 
+ipcMain.on('set-launch-at-startup', (_, value) => {
+  app.setLoginItemSettings({
+    openAtLogin: value,
+    path: app.getPath('exe')
+  })
+})
+
 ipcMain.on('quit-app', () => {
   app.quit()
 })
