@@ -6,7 +6,6 @@ const {
   Menu,
   screen,
   nativeImage,
-  systemPreferences,
   globalShortcut,
 } = require('electron')
 const path = require('path')
@@ -37,6 +36,7 @@ function createWindow() {
     movable: true,
     hasShadow: false,
     roundedCorners: false,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -48,11 +48,14 @@ function createWindow() {
   // Load app
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
-    // Open devtools detached so they don't affect window size
-    // mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+
+  // Show window only when content is ready to avoid blank flash
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+  })
 
   // Keep always on top aggressively
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false })
@@ -222,11 +225,6 @@ ipcMain.on('quit-app', () => {
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  // Disable GPU compositing quirks on Windows for transparent windows
-  if (process.platform === 'win32') {
-    app.commandLine.appendSwitch('disable-gpu')
-  }
-
   createWindow()
 
   try {
@@ -245,10 +243,6 @@ app.whenReady().then(() => {
     if (!mainWindow) return
     mainWindow.show()
     mainWindow.webContents.send('open-settings')
-  })
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
