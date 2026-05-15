@@ -6,16 +6,20 @@ import CalendarMini from './CalendarMini.jsx'
 
 const isElectron = !!window.electronAPI
 
-// ── Source icon map ──────────────────────────────────────────────────────────
+// ── Source icon map (Windows apps) ─────────────────────────────────────────
 function SourceConnector({ source }) {
   const map = {
-    Spotify:    { emoji: '🎵', color: '#1DB954', label: 'Spotify' },
-    YouTube:    { emoji: '▶️', color: '#FF0000', label: 'YouTube' },
-    'Apple Music': { emoji: '🎶', color: '#FC3C44', label: 'Apple Music' },
-    SoundCloud: { emoji: '☁️', color: '#FF5500', label: 'SoundCloud' },
-    Browser:    { emoji: '🌐', color: '#4285F4', label: 'Browser' },
+    Spotify:         { emoji: '🎵', color: '#1DB954', label: 'Spotify' },
+    'Chrome':        { emoji: '🌐', color: '#4285F4', label: 'Chrome' },
+    'Edge':          { emoji: '🌐', color: '#0078D4', label: 'Edge' },
+    'Firefox':       { emoji: '🌐', color: '#FF7139', label: 'Firefox' },
+    'VLC':           { emoji: '🎬', color: '#FF8800', label: 'VLC' },
+    'Groove Music':  { emoji: '🎵', color: '#7c6af7', label: 'Groove' },
+    'Windows Media': { emoji: '🎵', color: '#0078D4', label: 'WMP' },
+    'Browser':       { emoji: '🌐', color: '#4285F4', label: 'Browser' },
+    'Media':         { emoji: '🎵', color: '#7c6af7', label: 'Media' },
   }
-  const info = map[source] || { emoji: '🎵', color: '#7c6af7', label: source || 'Music' }
+  const info = map[source] || { emoji: '🎵', color: '#7c6af7', label: source || 'Media' }
 
   return (
     <div className="source-connector" style={{ '--src-color': info.color }}>

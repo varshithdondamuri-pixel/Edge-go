@@ -19,6 +19,9 @@ let settingsWindow
 let tray
 let isExpanded = false
 
+// Tracks the notch's saved position so restores are correct
+const notchState = { position: 'center', width: 320 }
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
@@ -252,15 +255,19 @@ $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime
-  function Await($task) {
-    $task.GetAwaiter().GetResult()
+  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  function Await($WinRtTask, $ResultType) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
   }
-  $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())
+  $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
   $sessions = $smgr.GetSessions()
   $results = [System.Collections.Generic.List[hashtable]]::new()
   foreach ($s in $sessions) {
     try {
-      $props = Await($s.TryGetMediaPropertiesAsync())
+      $props = Await($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.MediaProperties])
       $info  = $s.GetPlaybackInfo()
       $tl    = $s.GetTimelineProperties()
       $src   = $s.SourceAppUserModelId
@@ -271,19 +278,19 @@ try {
         '*firefox*'  { 'Firefox' }
         '*vlc*'      { 'VLC' }
         '*groove*'   { 'Groove Music' }
-        '*media*'    { 'Windows Media' }
+        '*music*'    { 'Windows Media' }
         default      { 'Media' }
       }
       $results.Add(@{
         title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
         artist    = if ($props.Artist)      { $props.Artist }      else { '' }
         album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
-        isPlaying = ($info.PlaybackStatus -eq 'Playing')
-        position  = if ($tl.Position)       { [math]::Round($tl.Position.TotalSeconds, 1) } else { 0 }
-        duration  = if ($tl.EndTime)        { [math]::Round($tl.EndTime.TotalSeconds, 1) }  else { 0 }
+        isPlaying = ($info.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing)
+        position  = if ($tl) { try { [math]::Round($tl.Position.TotalSeconds, 1) } catch { 0 } } else { 0 }
+        duration  = if ($tl) { try { [math]::Round($tl.EndTime.TotalSeconds, 1) } catch { 0 } } else { 0 }
         source    = $label
       })
-    } catch {}
+    } catch { }
   }
   if ($results.Count -gt 0) {
     $results | ConvertTo-Json -Compress
@@ -322,25 +329,37 @@ ipcMain.on('media-command', (_, command, value, source) => {
 
   if (!method) return
 
+  const safeSource = (source || '').replace(/'/g, "''")
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-function Await($t) { $t.GetAwaiter().GetResult() }
-$smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+function Await($WinRtTask, $ResultType) {
+  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  $netTask.Wait(-1) | Out-Null
+  $netTask.Result
+}
+function AwaitAction($WinRtTask) {
+  $asTask = [System.WindowsRuntimeSystemExtensions].GetMethod('AsTask', [Type[]]@([Windows.Foundation.IAsyncAction]))
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  $netTask.Wait(-1) | Out-Null
+}
+$smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 $sessions = $smgr.GetSessions()
-$target = '${(source || '').replace(/'/g, "''")}'.ToLower()
+$target = '${safeSource}'.ToLower()
 $matched = $false
 foreach ($s in $sessions) {
   $id = $s.SourceAppUserModelId.ToLower()
   if ($target -and $id -like "*$target*") {
-    Await($s.${method}())
+    AwaitAction($s.${method}())
     $matched = $true
     break
   }
 }
 if (-not $matched) {
   $cur = $smgr.GetCurrentSession()
-  if ($cur) { Await($cur.${method}()) }
+  if ($cur) { AwaitAction($cur.${method}()) }
 }
 `
   runPowerShell(psScript).catch(e => console.error('media-command error:', e.message))
@@ -358,13 +377,23 @@ ipcMain.handle('get-settings', () => null)
 
 // ─── IPC: Window management ──────────────────────────────────────────────────
 
+function getNotchX(sw) {
+  const w = notchState.width || 320
+  switch (notchState.position) {
+    case 'left':  return 16
+    case 'right': return sw - w - 16
+    default:      return Math.floor(sw / 2 - w / 2)
+  }
+}
+
 ipcMain.on('expand-window', (_, expanded) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const { width: sw } = screen.getPrimaryDisplay().workAreaSize
+  const x = getNotchX(sw)
   if (expanded) {
-    mainWindow.setBounds({ width: 680, height: 200, x: Math.floor(sw / 2 - 340), y: 0 }, true)
+    mainWindow.setBounds({ width: 680, height: 200, x: Math.max(0, Math.min(x - 180, sw - 680)), y: 0 }, true)
   } else {
-    mainWindow.setBounds({ width: 320, height: 44, x: Math.floor(sw / 2 - 160), y: 0 }, true)
+    mainWindow.setBounds({ width: notchState.width || 320, height: 44, x, y: 0 }, true)
   }
 })
 
@@ -374,15 +403,25 @@ ipcMain.on('set-window-size', (_, { width, height }) => {
   mainWindow.setBounds({ width, height, x: Math.floor(sw / 2 - width / 2), y: 0 }, true)
 })
 
+ipcMain.on('set-notch-position', (_, position, notchWidth) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  notchState.position = position || 'center'
+  notchState.width = notchWidth || 320
+  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
+  const x = getNotchX(sw)
+  const currentBounds = mainWindow.getBounds()
+  mainWindow.setBounds({ ...currentBounds, x, width: notchState.width }, true)
+})
+
 ipcMain.on('set-control-center', (_, isOpen) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
   if (isOpen) {
-    // Expand the main window to cover the top-right area for Control Center overlay
     mainWindow.setBounds({ width: sw, height: sh, x: 0, y: 0 }, true)
     mainWindow.setIgnoreMouseEvents(false)
   } else {
-    mainWindow.setBounds({ width: 320, height: 44, x: Math.floor(sw / 2 - 160), y: 0 }, true)
+    const x = getNotchX(sw)
+    mainWindow.setBounds({ width: notchState.width || 320, height: 44, x, y: 0 }, true)
   }
 })
 

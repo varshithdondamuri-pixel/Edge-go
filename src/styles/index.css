@@ -65,11 +65,14 @@ html,body,#root{
 }
 
 /* ── NOTCH WRAPPER ── */
+/* Zero-size anchor — only the notch-bar itself captures events.
+   The Electron window is sized to fit the pill, so this is just a flex positioner. */
 .notch-wrapper{
   position:fixed;top:0;left:0;
-  width:100vw;height:100vh;
+  width:100vw;height:0;
   display:flex;justify-content:center;align-items:flex-start;
   pointer-events:none;
+  overflow:visible;
 }
 
 .notch-bar {

@@ -2,6 +2,27 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.3.0] - 2026-05-16
+
+### Fixed
+- **Notch position (left/center/right)** now correctly repositions the window via IPC `set-notch-position`
+- **Control Center** restores window to the correct saved position (not hardcoded center) when closed
+- **Expand/collapse** respects saved `notchPosition` and `collapsedWidth` from settings
+- **PowerShell SMTC** media commands now use proper `AsTask` bridge instead of broken `GetAwaiter().GetResult()` on WinRT
+- **Media polling** correctly uses the proper `IAsyncOperation` generic type for `TryGetMediaPropertiesAsync`
+- **Settings → main window sync** fixed: changes in Settings window immediately propagate to NotchBar via `settings-updated` IPC
+- **Apple Music** label replaced with Spotify / Windows apps (Chrome, Edge, Firefox, VLC, Groove, WMP)
+- **Mac keyboard shortcuts** (⌘⇧) replaced with Windows shortcuts (Win+Alt)
+- **About tab** now shows correct version v1.3.0 and platform info
+- **Connectors tab** shows Windows-native media sources (Spotify, Browser, WMP)
+
+### Changed
+- `notchState` tracker in `main.js` remembers current position/width across all window operations
+- Media command PowerShell uses `AwaitAction` helper for `IAsyncAction` operations (play/pause/next/prev)
+- App.jsx: settings broadcast uses ref guard to avoid overwriting settings on initial mount
+
+---
+
 ---
 
 ## [v1.2.0] — 2026-05-16

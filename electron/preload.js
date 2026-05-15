@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWindowSize: (size) => ipcRenderer.send('set-window-size', size),
   setAlwaysOnTop: (value) => ipcRenderer.send('set-always-on-top', value),
   setLaunchAtStartup: (value) => ipcRenderer.send('set-launch-at-startup', value),
+  setNotchPosition: (position, width) => ipcRenderer.send('set-notch-position', position, width),
   openSettings: (tab) => ipcRenderer.send('open-settings', tab),
   closeSettings: () => ipcRenderer.send('close-settings'),
   setControlCenter: (isOpen) => ipcRenderer.send('set-control-center', isOpen),

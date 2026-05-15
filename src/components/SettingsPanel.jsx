@@ -365,16 +365,19 @@ function BatteryTab({ s, set }) {
 function ConnectorsTab({ s, set }) {
   return (
     <>
-      <Section title="Media Connectors">
-        <Row label="Apple Music" hint="Now Playing connector">
-          <Toggle id="tog-applemusic" value={s.spotifyEnabled} onChange={v => set('spotifyEnabled', v)} />
+      <Section title="Media Apps">
+        <Row label="Spotify" hint="Windows SMTC connector">
+          <Toggle id="tog-spotify" value={s.spotifyEnabled} onChange={v => set('spotifyEnabled', v)} />
         </Row>
-        <Row label="Browser Media" hint="Chrome/Edge/Safari connector">
+        <Row label="Browser Media" hint="Chrome / Edge / Firefox">
           <Toggle id="tog-browser" value={s.browserEnabled} onChange={v => set('browserEnabled', v)} />
+        </Row>
+        <Row label="Windows Media Player">
+          <Toggle id="tog-wmp" value={s.spotifyEnabled} onChange={v => set('spotifyEnabled', v)} />
         </Row>
       </Section>
       <Section title="Dock Connectors">
-        <Row label="Calendar Connector">
+        <Row label="Calendar">
           <Toggle id="tog-calcn" value={s.calendarConnector} onChange={v => set('calendarConnector', v)} />
         </Row>
         <Row label="Clipboard History">
@@ -390,25 +393,25 @@ function ConnectorsTab({ s, set }) {
 
 function ShortcutsTab() {
   const [shortcuts, setShortcuts] = useState({
-    sneakPeek:   ['⇧', '⌘', 'H'],
-    toggleNotch: ['⇧', '⌘', 'I'],
-    controlCenter: ['⇧', '⌘', 'C'],
-    clipboard:   ['⇧', '⌘', 'V'],
+    sneakPeek:     ['Win', 'Alt', 'H'],
+    toggleNotch:   ['Win', 'Alt', 'E'],
+    controlCenter: ['Win', 'Alt', 'C'],
+    clipboard:     ['Win', 'Alt', 'V'],
   })
   const clear = (key) => setShortcuts(s => ({ ...s, [key]: [] }))
   return (
     <>
-      <Section title="Media">
-        <Row label="Toggle Sneak Peek" hint="Show track title for a moment">
-          {shortcuts.sneakPeek.length > 0
-            ? <ShortcutKey keys={shortcuts.sneakPeek} onClear={() => clear('sneakPeek')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, sneakPeek: ['⇧','⌘','H'] }))}>Record</button>
-          }
-        </Row>
-        <Row label="Toggle Notch Open">
+      <Section title="App">
+        <Row label="Toggle HUD Visibility" hint="Win + Alt + E">
           {shortcuts.toggleNotch.length > 0
             ? <ShortcutKey keys={shortcuts.toggleNotch} onClear={() => clear('toggleNotch')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, toggleNotch: ['⇧','⌘','I'] }))}>Record</button>
+            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, toggleNotch: ['Win','Alt','E'] }))}>Restore</button>
+          }
+        </Row>
+        <Row label="Open Settings" hint="Win + Alt + S">
+          {shortcuts.sneakPeek.length > 0
+            ? <ShortcutKey keys={shortcuts.sneakPeek} onClear={() => clear('sneakPeek')} />
+            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, sneakPeek: ['Win','Alt','H'] }))}>Restore</button>
           }
         </Row>
       </Section>
@@ -416,13 +419,13 @@ function ShortcutsTab() {
         <Row label="Open Control Center">
           {shortcuts.controlCenter.length > 0
             ? <ShortcutKey keys={shortcuts.controlCenter} onClear={() => clear('controlCenter')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, controlCenter: ['⇧','⌘','C'] }))}>Record</button>
+            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, controlCenter: ['Win','Alt','C'] }))}>Restore</button>
           }
         </Row>
         <Row label="Open Clipboard">
           {shortcuts.clipboard.length > 0
             ? <ShortcutKey keys={shortcuts.clipboard} onClear={() => clear('clipboard')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, clipboard: ['⇧','⌘','V'] }))}>Record</button>
+            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, clipboard: ['Win','Alt','V'] }))}>Restore</button>
           }
         </Row>
       </Section>
@@ -485,14 +488,15 @@ function AboutTab() {
       <div className="about-hero">
         <div className="about-logo">✦</div>
         <div className="about-name">Edge Go</div>
-        <div className="about-version">v1.0.0</div>
+        <div className="about-version">v1.2.0</div>
       </div>
       <div className="about-tagline">
-        A sleek, always-on-top floating HUD bar<br />built seamlessly for Windows.
+        A sleek, always-on-top floating HUD bar<br />built exclusively for Windows.
       </div>
       <Section title="Version info">
-        <Row label="Release name"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Flying Rabbit 🐇</span></Row>
-        <Row label="Version"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>1.0.0</span></Row>
+        <Row label="Release name"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows Edition 🪟</span></Row>
+        <Row label="Version"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>1.2.0</span></Row>
+        <Row label="Platform"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows 10 / 11 (x64)</span></Row>
       </Section>
       <Section title="Software updates">
         <Row label="Automatically check for updates"><Toggle id="tog-autoupdate" value={true} onChange={() => {}} /></Row>
