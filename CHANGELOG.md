@@ -4,15 +4,37 @@ All notable changes to Edge Go are documented here.
 
 ---
 
-## [v1.1.1] — 2026-05-16
+## [v1.2.0] — 2026-05-16
 
-### Patch
-- docs: add `CHANGELOG.md` to repository
-- chore: bump version to 1.1.1 to include changelog in clean release tag
+### Breaking Changes
+- **Windows-only release** — all macOS/AppleScript code removed from `electron/main.js`
+
+### Bug Fixes
+- Fixed PowerShell media commands crashing due to quote-escaping — now uses `-EncodedCommand` (base64)
+- Fixed Control Center window expansion — now correctly covers the full screen for the overlay
+- Fixed transparent window showing white corners on Windows — added `backgroundColor: '#00000000'`
+- Fixed Settings window transparency glitch on Windows
+- Fixed `window-all-closed` incorrectly allowing quit — app now stays alive in system tray
+- Fixed collapsed notch height clipping content — increased from 40px to 44px
+
+### Removed (macOS)
+- `osascript` / AppleScript media info and playback control
+- `osascript` brightness key simulation
+- `defaults write com.apple.ncprefs` DND toggle
+- `screencapture` screenshot command
+- `setVisibleOnAllWorkspaces` (macOS-only Electron API)
+- All `process.platform === 'darwin'` branches
+
+### Improvements
+- PowerShell media polling now uses proper `async/await` (`GetAwaiter().GetResult()`)
+- Media source labels updated: Chrome, Edge, Firefox, VLC, Groove Music, Windows Media
+- `setAlwaysOnTop` level changed from `'screen-saver'` to `'pop-up-menu'` (correct for Windows)
+- Tray menu now shows app version
 
 ---
 
 ## [v1.1.0] — 2026-05-16
+
 
 ### Bug Fixes
 - **Control Center** no longer closes when clicking tiles, sliders, or internal buttons

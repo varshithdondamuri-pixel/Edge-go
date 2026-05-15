@@ -19,6 +19,22 @@ let settingsWindow
 let tray
 let isExpanded = false
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Run a PowerShell command safely using -EncodedCommand to avoid
+ * escaping issues with quotes inside the script.
+ */
+function runPowerShell(script) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  return new Promise((resolve, reject) => {
+    exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, (err, stdout, stderr) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+  })
+}
+
 // ─── Window creation ────────────────────────────────────────────────────────
 
 function createWindow() {
@@ -26,17 +42,17 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     width: 320,
-    height: 40,
+    height: 44,
     x: Math.floor(width / 2 - 160),
     y: 0,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
     movable: true,
     hasShadow: false,
-    roundedCorners: false,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -56,15 +72,16 @@ function createWindow() {
   // Show window only when content is ready to avoid blank flash
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
+    // Re-assert always-on-top after show
+    mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
   })
 
-  // Keep always on top aggressively
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false })
-  mainWindow.setAlwaysOnTop(true, 'screen-saver', 1)
+  // Keep always on top on Windows
+  mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
 
   mainWindow.on('blur', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setAlwaysOnTop(true, 'screen-saver', 1)
+      mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
     }
   })
 
@@ -90,7 +107,7 @@ function createSettingsWindow(tab = 'general') {
     minHeight: 600,
     title: 'Edge Go Settings',
     frame: false,
-    transparent: true, // Glassmorphism for settings
+    transparent: true,
     backgroundColor: '#00000000',
     hasShadow: true,
     center: true,
@@ -103,13 +120,8 @@ function createSettingsWindow(tab = 'general') {
     },
   })
 
-  // Load app with settings hash
-  const settingsURL = isDev 
-    ? `http://localhost:5173/#settings?tab=${tab}`
-    : `file://${path.join(__dirname, '../dist/index.html')}#settings?tab=${tab}`
-
   if (isDev) {
-    settingsWindow.loadURL(settingsURL)
+    settingsWindow.loadURL(`http://localhost:5173/#settings?tab=${tab}`)
   } else {
     settingsWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: `settings?tab=${tab}` })
   }
@@ -139,10 +151,7 @@ function createTray() {
 
   const buildMenu = () =>
     Menu.buildFromTemplate([
-      {
-        label: 'Edge Go',
-        enabled: false,
-      },
+      { label: 'Edge Go v' + app.getVersion(), enabled: false },
       { type: 'separator' },
       {
         label: mainWindow?.isVisible() ? 'Hide Edge Go' : 'Show Edge Go',
@@ -155,9 +164,7 @@ function createTray() {
       },
       {
         label: 'Settings',
-        click: () => {
-          createSettingsWindow()
-        },
+        click: () => createSettingsWindow(),
       },
       { type: 'separator' },
       {
@@ -169,6 +176,7 @@ function createTray() {
   tray.setToolTip('Edge Go')
   tray.setContextMenu(buildMenu())
 
+  // Left-click on tray toggles window
   tray.on('click', () => {
     if (!mainWindow) return
     if (mainWindow.isVisible()) mainWindow.hide()
@@ -180,262 +188,183 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
-  if (process.platform === 'win32') {
-    return new Promise((resolve) => {
-      exec(
-        'wmic path win32_battery get EstimatedChargeRemaining,BatteryStatus /format:value',
-        (err, stdout) => {
-          if (err) {
-            resolve({ level: 100, charging: false, available: false })
-            return
-          }
-          const levelMatch = stdout.match(/EstimatedChargeRemaining=(\d+)/)
-          const statusMatch = stdout.match(/BatteryStatus=(\d+)/)
-          if (!levelMatch) {
-            resolve({ level: 100, charging: false, available: false })
-            return
-          }
-          resolve({
-            level: parseInt(levelMatch[1]),
-            charging: statusMatch ? parseInt(statusMatch[1]) === 2 : false,
-            available: true,
-          })
+  return new Promise((resolve) => {
+    exec(
+      'wmic path win32_battery get EstimatedChargeRemaining,BatteryStatus /format:value',
+      (err, stdout) => {
+        if (err || !stdout.trim()) {
+          resolve({ level: 100, charging: false, available: false })
+          return
         }
-      )
-    })
-  } else {
-    // Dev fallback — return a realistic mock
-    return { level: 78, charging: false, available: true }
-  }
+        const levelMatch = stdout.match(/EstimatedChargeRemaining=(\d+)/)
+        const statusMatch = stdout.match(/BatteryStatus=(\d+)/)
+        if (!levelMatch) {
+          resolve({ level: 100, charging: false, available: false })
+          return
+        }
+        resolve({
+          level: parseInt(levelMatch[1]),
+          // BatteryStatus=2 means "Charging", 1 means "On Battery"
+          charging: statusMatch ? parseInt(statusMatch[1]) === 2 : false,
+          available: true,
+        })
+      }
+    )
+  })
 })
 
 // ─── IPC: System Info ─────────────────────────────────────────────────────
 
 ipcMain.handle('get-system-info', () => ({
-  platform: process.platform,
+  platform: 'win32',
   hostname: os.hostname(),
   arch: os.arch(),
   version: app.getVersion(),
 }))
 
 ipcMain.handle('get-system-state', async () => {
-  const state = {
-    dnd: false,
-    nightLight: false,
-    brightness: 72
-  };
+  const state = { dnd: false, nightLight: false, brightness: 72 }
 
   try {
-    if (process.platform === 'win32') {
-      // Get Brightness
-      const brightnessOutput = await new Promise(r => exec('powershell (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness', (e, o) => r(o)));
-      if (brightnessOutput) state.brightness = parseInt(brightnessOutput.trim()) || 72;
+    // Get brightness
+    const brightnessOut = await runPowerShell(
+      `(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness`
+    ).catch(() => '')
+    if (brightnessOut) state.brightness = parseInt(brightnessOut.trim()) || 72
 
-      // Get DND (Focus Assist) status via registry
-      const dndOutput = await new Promise(r => exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings" /v NOC_GLOBAL_SETTING_TOASTS_ENABLED', (e, o) => r(o)));
-      if (dndOutput && dndOutput.includes('0x0')) state.dnd = true;
-    }
+    // Get Focus Assist (DND) — 0x0 means notifications disabled = DND on
+    const dndOut = await runPowerShell(
+      `(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -ErrorAction SilentlyContinue).NOC_GLOBAL_SETTING_TOASTS_ENABLED`
+    ).catch(() => '')
+    if (dndOut && dndOut.trim() === '0') state.dnd = true
   } catch (e) {
-    console.error('Failed to get system state:', e);
+    console.error('get-system-state error:', e.message)
   }
 
-  return state;
+  return state
 })
 
-// ─── IPC: Media Info ────────────
+// ─── IPC: Media Info (Windows SMTC) ─────────────────────────────────────────
 
 ipcMain.handle('get-media-info', async () => {
-  if (process.platform === 'darwin') {
-    return new Promise((resolve) => {
-      const betterScript = `
-        tell application "System Events"
-          set musicRunning to exists process "Music"
-          set spotifyRunning to exists process "Spotify"
-        end tell
-
-        set output to ""
-
-        if spotifyRunning then
-          tell application "Spotify"
-            try
-              set t_state to player state as string
-              set t_name to name of current track
-              set t_artist to artist of current track
-              set t_album to album of current track
-              set t_duration to (duration of current track) / 1000
-              set t_position to player position
-              set t_volume to sound volume
-              set output to output & t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify" & "###"
-            end try
-          end tell
-        end if
-
-        if musicRunning then
-          tell application "Music"
-            try
-              set t_state to player state as string
-              set t_name to name of current track
-              set t_artist to artist of current track
-              set t_album to album of current track
-              set t_duration to duration of current track
-              set t_position to player position
-              set t_volume to sound volume
-              set output to output & t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music" & "###"
-            end try
-          end tell
-        end if
-
-        return output
-      `;
-
-      exec(`osascript -e '${betterScript}'`, (err, stdout) => {
-        if (err || !stdout.trim()) {
-          resolve([]);
-          return;
-        }
-        const rawSessions = stdout.trim().split('###').filter(s => s.trim());
-        const sessions = rawSessions.map(rs => {
-          const parts = rs.split('|||');
-          if (parts.length === 8) {
-            return {
-              title: parts[0],
-              artist: parts[1],
-              album: parts[2],
-              duration: parseFloat(parts[3]) || 0,
-              position: parseFloat(parts[4]) || 0,
-              isPlaying: parts[5].toLowerCase().includes('playing'),
-              volume: parseInt(parts[6]) || 0,
-              source: parts[7],
-              albumArt: null
-            };
-          }
-          return null;
-        }).filter(Boolean);
-        resolve(sessions);
-      });
-    });
-  } else if (process.platform === 'win32') {
-    return new Promise((resolve) => {
-      const psScript = `
-        $ErrorActionPreference = 'SilentlyContinue'
-        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-        Add-Type -AssemblyName System.Runtime.WindowsRuntime
-        $sessionManager = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync().GetResults()
-        $sessions = $sessionManager.GetSessions()
-        $results = @()
-        foreach ($session in $sessions) {
-            try {
-              $props = $session.TryGetMediaPropertiesAsync().GetResults()
-              $info = $session.GetPlaybackInfo()
-              $timeline = $session.GetTimelineProperties()
-              
-              $sourceName = $session.SourceAppUserModelId
-              $displaySource = "Media App"
-              if ($sourceName -like '*spotify*') { $displaySource = 'Spotify' }
-              elseif ($sourceName -like '*AppleMusic*') { $displaySource = 'Apple Music' }
-              elseif ($sourceName -like '*chrome*') { $displaySource = 'Chrome' }
-              elseif ($sourceName -like '*edge*') { $displaySource = 'Edge' }
-              elseif ($sourceName -like '*Video*') { $displaySource = 'Video' }
-
-              $results += @{
-                  title = if ($props.Title) { $props.Title } else { "Unknown" }
-                  artist = if ($props.Artist) { $props.Artist } else { "Unknown Artist" }
-                  album = if ($props.AlbumTitle) { $props.AlbumTitle } else { "" }
-                  isPlaying = ($info.PlaybackStatus -eq 'Playing')
-                  position = if ($timeline.Position) { $timeline.Position.TotalSeconds } else { 0 }
-                  duration = if ($timeline.EndTime) { $timeline.EndTime.TotalSeconds } else { 0 }
-                  source = $displaySource
-              }
-            } catch {}
-        }
-        if ($results.Count -gt 0) { $results | ConvertTo-Json } else { "[]" }
-      `;
-      exec(`powershell -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`, (err, stdout) => {
-        if (err || !stdout.trim()) { resolve([]); return; }
-        try {
-          let data = JSON.parse(stdout);
-          if (!Array.isArray(data)) data = [data];
-          const sessions = data.map(s => ({
-            title: s.title || 'Unknown Title',
-            artist: s.artist || 'Unknown Artist',
-            album: s.album || '',
-            duration: s.duration || 0,
-            position: s.position || 0,
-            isPlaying: !!s.isPlaying,
-            volume: 50,
-            source: s.source,
-            albumArt: null
-          }));
-          resolve(sessions);
-        } catch { resolve([]); }
-      });
-    });
+  const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  function Await($task) {
+    $task.GetAwaiter().GetResult()
   }
-  return [];
+  $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())
+  $sessions = $smgr.GetSessions()
+  $results = [System.Collections.Generic.List[hashtable]]::new()
+  foreach ($s in $sessions) {
+    try {
+      $props = Await($s.TryGetMediaPropertiesAsync())
+      $info  = $s.GetPlaybackInfo()
+      $tl    = $s.GetTimelineProperties()
+      $src   = $s.SourceAppUserModelId
+      $label = switch -Wildcard ($src.ToLower()) {
+        '*spotify*'  { 'Spotify' }
+        '*chrome*'   { 'Chrome' }
+        '*msedge*'   { 'Edge' }
+        '*firefox*'  { 'Firefox' }
+        '*vlc*'      { 'VLC' }
+        '*groove*'   { 'Groove Music' }
+        '*media*'    { 'Windows Media' }
+        default      { 'Media' }
+      }
+      $results.Add(@{
+        title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
+        artist    = if ($props.Artist)      { $props.Artist }      else { '' }
+        album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
+        isPlaying = ($info.PlaybackStatus -eq 'Playing')
+        position  = if ($tl.Position)       { [math]::Round($tl.Position.TotalSeconds, 1) } else { 0 }
+        duration  = if ($tl.EndTime)        { [math]::Round($tl.EndTime.TotalSeconds, 1) }  else { 0 }
+        source    = $label
+      })
+    } catch {}
+  }
+  if ($results.Count -gt 0) {
+    $results | ConvertTo-Json -Compress
+  } else { '[]' }
+} catch { '[]' }
+`
+  try {
+    const out = await runPowerShell(psScript)
+    if (!out || !out.trim() || out.trim() === '[]') return []
+    let data = JSON.parse(out.trim())
+    if (!Array.isArray(data)) data = [data]
+    return data.map(s => ({
+      title: s.title || 'Unknown Title',
+      artist: s.artist || '',
+      album: s.album || '',
+      duration: Number(s.duration) || 0,
+      position: Number(s.position) || 0,
+      isPlaying: !!s.isPlaying,
+      volume: 50,
+      source: s.source || 'Media',
+      albumArt: null,
+    }))
+  } catch (e) {
+    console.error('get-media-info error:', e.message)
+    return []
+  }
 })
 
-ipcMain.on('update-settings', (event, settings) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('settings-updated', settings);
-    }
-  });
-});
-
-ipcMain.handle('get-settings', () => null);
+// ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
 ipcMain.on('media-command', (_, command, value, source) => {
-  if (process.platform === 'darwin') {
-    let script = '';
-    let target = source === 'Spotify' ? 'Spotify' : 'Music';
-    if (command === 'playpause') script = `tell application "${target}" to playpause`;
-    else if (command === 'next') script = `tell application "${target}" to next track`;
-    else if (command === 'prev') script = `tell application "${target}" to previous track`;
-    else if (command === 'seek') script = `tell application "${target}" to set player position to ${value}`;
-    else if (command === 'volume') script = `tell application "${target}" to set sound volume to ${value}`;
-    if (script) exec(`osascript -e '${script}'`);
-  } else if (process.platform === 'win32') {
-    let psCommand = '';
-    if (command === 'playpause') psCommand = 'TryTogglePlayPauseAsync()';
-    else if (command === 'next') psCommand = 'TrySkipNextAsync()';
-    else if (command === 'prev') psCommand = 'TrySkipPreviousAsync()';
-    
-    if (psCommand) {
-      const fullPs = `
-        Add-Type -AssemblyName System.Runtime.WindowsRuntime
-        $sm = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync().GetResults()
-        $sessions = $sm.GetSessions()
-        $targetSource = "${source}"
-        foreach ($s in $sessions) {
-            $id = $s.SourceAppUserModelId.ToLower()
-            if ($targetSource -eq "Spotify" -and $id -like "*spotify*") {
-                $s.${psCommand}.GetResults()
-                return
-            }
-            elseif ($targetSource -eq "Apple Music" -and $id -like "*music*") {
-                $s.${psCommand}.GetResults()
-                return
-            }
-            elseif ($id -like "*$($targetSource.ToLower())*") {
-                $s.${psCommand}.GetResults()
-                return
-            }
-        }
-        if ($sm.GetCurrentSession()) { $sm.GetCurrentSession().${psCommand}.GetResults() }
-      `;
-      exec(`powershell -ExecutionPolicy Bypass -Command "${fullPs.replace(/\n/g, ' ')}"`);
-    }
+  let method = ''
+  if (command === 'playpause') method = 'TryTogglePlayPauseAsync'
+  else if (command === 'next')  method = 'TrySkipNextAsync'
+  else if (command === 'prev')  method = 'TrySkipPreviousAsync'
+
+  if (!method) return
+
+  const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+function Await($t) { $t.GetAwaiter().GetResult() }
+$smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync())
+$sessions = $smgr.GetSessions()
+$target = '${(source || '').replace(/'/g, "''")}'.ToLower()
+$matched = $false
+foreach ($s in $sessions) {
+  $id = $s.SourceAppUserModelId.ToLower()
+  if ($target -and $id -like "*$target*") {
+    Await($s.${method}())
+    $matched = $true
+    break
   }
+}
+if (-not $matched) {
+  $cur = $smgr.GetCurrentSession()
+  if ($cur) { Await($cur.${method}()) }
+}
+`
+  runPowerShell(psScript).catch(e => console.error('media-command error:', e.message))
 })
+
+// ─── IPC: Settings sync ──────────────────────────────────────────────────────
+
+ipcMain.on('update-settings', (_, settings) => {
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) win.webContents.send('settings-updated', settings)
+  })
+})
+
+ipcMain.handle('get-settings', () => null)
+
+// ─── IPC: Window management ──────────────────────────────────────────────────
 
 ipcMain.on('expand-window', (_, expanded) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const { width: sw } = screen.getPrimaryDisplay().workAreaSize
   if (expanded) {
-    mainWindow.setBounds({ width: 660, height: 200, x: Math.floor(sw / 2 - 330), y: 0 }, true)
+    mainWindow.setBounds({ width: 680, height: 200, x: Math.floor(sw / 2 - 340), y: 0 }, true)
   } else {
-    mainWindow.setBounds({ width: 320, height: 40, x: Math.floor(sw / 2 - 160), y: 0 }, true)
+    mainWindow.setBounds({ width: 320, height: 44, x: Math.floor(sw / 2 - 160), y: 0 }, true)
   }
 })
 
@@ -447,17 +376,18 @@ ipcMain.on('set-window-size', (_, { width, height }) => {
 
 ipcMain.on('set-control-center', (_, isOpen) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
   if (isOpen) {
-    mainWindow.setBounds({ width: 360, height: 720, x: sw - 376, y: 0 }, true)
-    mainWindow.setResizable(false)
+    // Expand the main window to cover the top-right area for Control Center overlay
+    mainWindow.setBounds({ width: sw, height: sh, x: 0, y: 0 }, true)
+    mainWindow.setIgnoreMouseEvents(false)
   } else {
-    mainWindow.setBounds({ width: 320, height: 40, x: Math.floor(sw / 2 - 160), y: 0 }, true)
+    mainWindow.setBounds({ width: 320, height: 44, x: Math.floor(sw / 2 - 160), y: 0 }, true)
   }
 })
 
 ipcMain.on('set-always-on-top', (_, value) => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(value, 'screen-saver', 1)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(value, 'pop-up-menu')
 })
 
 ipcMain.on('set-launch-at-startup', (_, value) => {
@@ -469,44 +399,44 @@ ipcMain.on('quit-app', () => app.quit())
 ipcMain.on('open-settings', (_, tab) => createSettingsWindow(tab))
 
 ipcMain.on('close-settings', () => {
-  if (settingsWindow) settingsWindow.close()
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close()
 })
 
+// ─── IPC: System controls (Windows only) ────────────────────────────────────
+
 ipcMain.on('set-brightness', (_, level) => {
-  if (process.platform === 'darwin') {
-    exec(`osascript -e 'tell application "System Events" to repeat 16 times' -e 'key code 144' -e 'end repeat'`);
-    const steps = Math.floor(level / 6.25);
-    if (steps > 0) exec(`osascript -e 'tell application "System Events" to repeat ${steps} times' -e 'key code 145' -e 'end repeat'`);
-  } else if (process.platform === 'win32') {
-    exec(`powershell (Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,${level})`)
-  }
+  runPowerShell(
+    `(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,${Math.max(0, Math.min(100, level))})`
+  ).catch(e => console.error('set-brightness error:', e.message))
 })
 
 ipcMain.on('set-dnd', (_, enabled) => {
-  if (process.platform === 'darwin') {
-    exec(`defaults write com.apple.ncprefs DoNotDisturb -bool ${enabled}`);
-  } else if (process.platform === 'win32') {
-    exec(`powershell -Command "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${enabled ? 0 : 1}"`);
-  }
+  // Toggle Windows Focus Assist via registry
+  // 0 = DND on (notifications blocked), 1 = DND off
+  const val = enabled ? 0 : 1
+  runPowerShell(
+    `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${val} -Force`
+  ).catch(e => console.error('set-dnd error:', e.message))
 })
 
 ipcMain.on('set-nightlight', (_, enabled) => {
-  if (process.platform === 'win32') {
-    const psCommand = `
-      $path = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultNetworkCloudStore\\Data\\Microsoft.Settings.Displays.BlueLightReduction.Setting"
-      $value = (Get-ItemProperty -Path $path).Data
-      if ($value) {
-        $value[24] = if ("${enabled ? 'true' : 'false'}" -eq "true") { 0x15 } else { 0x10 }
-        Set-ItemProperty -Path $path -Name "Data" -Value $value
-      }
-    `;
-    exec(`powershell -ExecutionPolicy Bypass -Command "${psCommand.replace(/\n/g, ' ')}"`);
+  // Toggle Windows Night Light via registry
+  const psScript = `
+$path = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultNetworkCloudStore\\Data\\Microsoft.Settings.Displays.BlueLightReduction.Setting'
+try {
+  $data = (Get-ItemProperty -Path $path -ErrorAction Stop).Data
+  if ($data -and $data.Length -gt 24) {
+    $data[24] = if (${enabled ? '$true' : '$false'}) { 0x15 } else { 0x10 }
+    Set-ItemProperty -Path $path -Name 'Data' -Value $data
   }
+} catch {}
+`
+  runPowerShell(psScript).catch(e => console.error('set-nightlight error:', e.message))
 })
 
 ipcMain.on('take-screenshot', () => {
-  if (process.platform === 'darwin') exec('screencapture -ic')
-  else if (process.platform === 'win32') exec('start ms-screenclip:')
+  // Opens Windows Snipping Tool overlay
+  exec('start ms-screenclip:')
 })
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────
@@ -520,22 +450,20 @@ app.whenReady().then(() => {
     console.warn('Tray creation skipped:', e.message)
   }
 
+  // Win+Alt+E: toggle HUD visibility
   globalShortcut.register('Super+Alt+E', () => {
     if (!mainWindow) return
     if (mainWindow.isVisible()) mainWindow.hide()
     else mainWindow.show()
   })
 
+  // Win+Alt+S: open settings
   globalShortcut.register('Super+Alt+S', () => {
     createSettingsWindow()
   })
 })
 
+// Keep app alive in tray even when all windows are closed
 app.on('window-all-closed', () => {
-  // On macOS it is common for applications and their menu bar
-  // to stay active until the user quits explicitly with Cmd + Q
-  if (process.platform !== 'darwin') {
-    // We don't want to quit if the tray is active
-    // app.quit() 
-  }
+  // Do NOT quit — app lives in the system tray
 })
