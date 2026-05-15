@@ -6,17 +6,39 @@ import CalendarMini from './CalendarMini.jsx'
 
 const isElectron = !!window.electronAPI
 
+// ── Source icon map ──────────────────────────────────────────────────────────
+function SourceConnector({ source }) {
+  const map = {
+    Spotify:    { emoji: '🎵', color: '#1DB954', label: 'Spotify' },
+    YouTube:    { emoji: '▶️', color: '#FF0000', label: 'YouTube' },
+    'Apple Music': { emoji: '🎶', color: '#FC3C44', label: 'Apple Music' },
+    SoundCloud: { emoji: '☁️', color: '#FF5500', label: 'SoundCloud' },
+    Browser:    { emoji: '🌐', color: '#4285F4', label: 'Browser' },
+  }
+  const info = map[source] || { emoji: '🎵', color: '#7c6af7', label: source || 'Music' }
+
+  return (
+    <div className="source-connector" style={{ '--src-color': info.color }}>
+      <span className="src-dot" />
+      <span className="src-emoji">{info.emoji}</span>
+      <span className="src-label">{info.label}</span>
+      <span className="src-live">LIVE</span>
+    </div>
+  )
+}
+
 export default function NotchBar({
   media, battery,
   onPlayPause, onNext, onPrev,
   onVolumeChange, onSeek,
   onSettingsOpen,
+  onClipboardOpen,
+  onControlCenterOpen,
 }) {
   const [expanded, setExpanded] = useState(false)
   const collapseTimer = useRef(null)
   const expandTimer = useRef(null)
 
-  // Expand on hover (with tiny delay to avoid flicker)
   const handleMouseEnter = useCallback(() => {
     if (collapseTimer.current) clearTimeout(collapseTimer.current)
     expandTimer.current = setTimeout(() => {
@@ -25,7 +47,6 @@ export default function NotchBar({
     }, 80)
   }, [])
 
-  // Collapse on leave (with debounce)
   const handleMouseLeave = useCallback(() => {
     if (expandTimer.current) clearTimeout(expandTimer.current)
     collapseTimer.current = setTimeout(() => {
@@ -66,6 +87,10 @@ export default function NotchBar({
                 {media.title}
               </span>
             </div>
+            {/* Mini source pill */}
+            {media.source && (
+              <span className="mini-source-pill">{media.source}</span>
+            )}
           </div>
           <div className="ncv-right">
             <Clock mini />
@@ -75,32 +100,68 @@ export default function NotchBar({
 
         {/* ── EXPANDED VIEW ── */}
         <div className="notch-expanded-view" aria-hidden={!expanded}>
-          <MusicPlayer
-            media={media}
-            onPlayPause={onPlayPause}
-            onNext={onNext}
-            onPrev={onPrev}
-            onVolumeChange={onVolumeChange}
-            onSeek={onSeek}
-          />
+          {/* LEFT: Music player with Spotify connector */}
+          <div className="notch-left-panel">
+            {/* Source connector bar */}
+            {media.source && (
+              <SourceConnector source={media.source} />
+            )}
+            <MusicPlayer
+              media={media}
+              onPlayPause={onPlayPause}
+              onNext={onNext}
+              onPrev={onPrev}
+              onVolumeChange={onVolumeChange}
+              onSeek={onSeek}
+            />
+          </div>
 
           <div className="notch-divider" role="separator" />
 
+          {/* RIGHT: Clock, battery, calendar, connectors */}
           <div className="notch-right-panel">
             <div className="nrp-top">
               <Clock />
-              <button
-                id="btn-settings"
-                className="gear-btn"
-                onClick={onSettingsOpen}
-                aria-label="Open settings"
-                title="Settings"
-              >
-                <GearIcon />
-              </button>
+              <div className="nrp-actions">
+                {/* Clipboard dock button */}
+                <button
+                  id="btn-clipboard"
+                  className="connector-btn"
+                  onClick={onClipboardOpen}
+                  aria-label="Open clipboard"
+                  title="Clipboard"
+                >
+                  <ClipIcon />
+                </button>
+                <button
+                  id="btn-settings"
+                  className="gear-btn"
+                  onClick={onSettingsOpen}
+                  aria-label="Open settings"
+                  title="Settings"
+                >
+                  <GearIcon />
+                </button>
+              </div>
             </div>
+
             <BatteryIndicator battery={battery} />
-            <CalendarMini />
+
+            {/* Calendar connector */}
+            <div className="calendar-connector">
+              <div className="cal-connector-header">
+                <span className="cal-connector-icon">📅</span>
+                <span className="cal-connector-label">Calendar</span>
+              </div>
+              <CalendarMini />
+            </div>
+
+            {/* Connector pills row */}
+            <div className="connector-pills">
+              <ConnectorPill icon="🎛️" label="Controls" onClick={onControlCenterOpen} id="pill-cc" />
+              <ConnectorPill icon="📋" label="Clipboard" onClick={onClipboardOpen} id="pill-clipboard" />
+              <ConnectorPill icon="⚙️" label="Settings" onClick={onSettingsOpen} id="pill-settings" />
+            </div>
           </div>
         </div>
 
@@ -108,6 +169,16 @@ export default function NotchBar({
         <div className="notch-indicator" />
       </div>
     </div>
+  )
+}
+
+// ── Connector pill ────────────────────────────────────────────────────────────
+function ConnectorPill({ icon, label, onClick, id }) {
+  return (
+    <button id={id} className="conn-pill" onClick={onClick} title={label}>
+      <span className="conn-pill-icon">{icon}</span>
+      <span className="conn-pill-label">{label}</span>
+    </button>
   )
 }
 
@@ -155,6 +226,14 @@ function GearIcon() {
         c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32
         c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z
         M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+    </svg>
+  )
+}
+
+function ClipIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
     </svg>
   )
 }

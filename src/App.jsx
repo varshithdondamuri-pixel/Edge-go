@@ -2,92 +2,139 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import NotchBar from './components/NotchBar.jsx'
 import VolumeHUD from './components/VolumeHUD.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
+import ClipboardDock from './components/ClipboardDock.jsx'
+import ControlCenter from './components/ControlCenter.jsx'
 
-// ─── Mock media state (used when Windows SMTC is unavailable) ──────────────
-
-const TRACKS = [
-  {
-    title: 'Blinding Lights',
-    artist: 'The Weeknd',
-    album: 'After Hours',
-    albumArt: null,
-    source: 'Spotify',
-    duration: 200,
-  },
-  {
-    title: 'Save Your Tears',
-    artist: 'The Weeknd',
-    album: 'After Hours',
-    albumArt: null,
-    source: 'Spotify',
-    duration: 215,
-  },
-  {
-    title: 'Starboy',
-    artist: 'The Weeknd ft. Daft Punk',
-    album: 'Starboy',
-    albumArt: null,
-    source: 'Spotify',
-    duration: 230,
-  },
-]
+// ─── Default media state ──────────────
 
 const INITIAL_MEDIA = {
-  ...TRACKS[0],
-  isPlaying: true,
-  volume: 72,
-  position: 45,
-  trackIndex: 0,
+  title: 'No media playing',
+  artist: 'Unknown',
+  album: '',
+  albumArt: null,
+  source: null,
+  duration: 0,
+  isPlaying: false,
+  volume: 50,
+  position: 0,
 }
 
 const isElectron = !!window.electronAPI
 
 export default function App() {
   const [media, setMedia] = useState(INITIAL_MEDIA)
+  const [allSessions, setAllSessions] = useState([])
   const [battery, setBattery] = useState({ level: 78, charging: false, available: true })
-  const [volumeHUD, setVolumeHUD] = useState({ visible: false, level: 72 })
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const volumeTimerRef = useRef(null)
-  const positionTimerRef = useRef(null)
-
-  // ── Battery polling ──────────────────────────────────────────────────────
-  useEffect(() => {
-    const fetchBattery = async () => {
-      if (isElectron) {
-        try {
-          const info = await window.electronAPI.getBattery()
-          if (info) setBattery(info)
-        } catch { /* use initial mock */ }
-      } else if (navigator.getBattery) {
-        try {
-          const bat = await navigator.getBattery()
-          const update = () =>
-            setBattery({ level: Math.round(bat.level * 100), charging: bat.charging, available: true })
-          update()
-          bat.addEventListener('levelchange', update)
-          bat.addEventListener('chargingchange', update)
-          return () => {
-            bat.removeEventListener('levelchange', update)
-            bat.removeEventListener('chargingchange', update)
-          }
-        } catch { /* use mock */ }
-      }
+  const [settings, setSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('edge-go-settings')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
     }
-    fetchBattery()
-    const id = setInterval(fetchBattery, 30_000)
-    return () => clearInterval(id)
+  })
+
+  // ── Routing ───────────────────────────────────────────────────────────────
+  const [route, setRoute] = useState(window.location.hash)
+  const [controlCenterOpen, setControlCenterOpen] = useState(false)
+  const [clipboardOpen, setClipboardOpen] = useState(false)
+  const [volumeHUD, setVolumeHUD] = useState({ visible: false, level: 50 })
+  
+  const positionTimerRef = useRef(null)
+  const volumeTimerRef = useRef(null)
+
+  useEffect(() => {
+    const handleHashChange = () => setRoute(window.location.hash)
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
 
-  // ── Settings trigger from tray ────────────────────────────────────────────
+  const isSettingsRoute = route.startsWith('#settings')
+  const settingsTab = new URLSearchParams(route.split('?')[1]).get('tab') || 'general'
+
+
+  // ── Settings Sync ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!window.electronAPI?.onOpenSettings) return
-    const unsub = window.electronAPI.onOpenSettings(() => setSettingsOpen(true))
-    return unsub
+    if (!isElectron || !window.electronAPI.onSettingsUpdated) return
+    return window.electronAPI.onSettingsUpdated((newSettings) => {
+      setSettings(newSettings)
+      // Also save to local storage for persistence on this window
+      localStorage.setItem('edge-go-settings', JSON.stringify(newSettings))
+    })
+  }, [])
+
+  // ── Apply Settings to Root ───────────────────────────────────────────────
+  useEffect(() => {
+    const root = document.documentElement
+    if (settings.accentColor) {
+      root.style.setProperty('--color-accent', settings.accentColor)
+      root.style.setProperty('--color-accent-glow', settings.accentColor + '59')
+    }
+    if (settings.cornerRadius !== undefined) {
+      root.style.setProperty('--notch-radius', `${settings.cornerRadius}px`)
+    }
+    if (settings.collapsedWidth !== undefined) {
+      root.style.setProperty('--notch-collapsed-width', `${settings.collapsedWidth}px`)
+    }
+    if (settings.expandedWidth !== undefined) {
+      root.style.setProperty('--notch-expanded-width', `${settings.expandedWidth}px`)
+    }
+    if (settings.blurIntensity) {
+      const blurMap = { low: '12px', medium: '24px', high: '40px' }
+      root.style.setProperty('--notch-blur', blurMap[settings.blurIntensity] || '24px')
+    }
+    if (settings.animationSpeed) {
+      const speedMap = { slow: '800ms', normal: '500ms', fast: '250ms', off: '0ms' }
+      root.style.setProperty('--notch-anim-speed', speedMap[settings.animationSpeed] || '500ms')
+    }
+    if (settings.darkMode !== undefined) {
+      root.style.setProperty('--is-dark', settings.darkMode ? '1' : '0')
+      if (settings.darkMode) {
+        root.classList.add('dark')
+      } else {
+        root.classList.remove('dark')
+      }
+    }
+  }, [settings])
+
+  // ── Real Media polling ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isElectron || !window.electronAPI.getMediaInfo) return
+    let isMounted = true
+    const fetchMedia = async () => {
+      try {
+        const info = await window.electronAPI.getMediaInfo()
+        if (isMounted) {
+          if (Array.isArray(info)) {
+            setAllSessions(info)
+            // "Spotify Priority" logic:
+            const spotify = info.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
+            const active = info.find(s => s.isPlaying)
+            setMedia(spotify || active || info[0] || INITIAL_MEDIA)
+          } else if (info) {
+            setAllSessions([info])
+            setMedia(info)
+          } else {
+            setAllSessions([])
+            setMedia(INITIAL_MEDIA)
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+    fetchMedia()
+    const id = setInterval(fetchMedia, 1000)
+    return () => {
+      isMounted = false
+      clearInterval(id)
+    }
   }, [])
 
   // ── Media position ticker ─────────────────────────────────────────────────
+  // Replaced by real media polling above! But we keep this just for smooth UI updates between polls if playing.
   useEffect(() => {
-    if (!media.isPlaying) {
+    if (!media.isPlaying || media.duration === 0) {
       clearInterval(positionTimerRef.current)
       return
     }
@@ -95,15 +142,13 @@ export default function App() {
       setMedia(m => {
         const next = m.position + 1
         if (next >= m.duration) {
-          // auto-advance track
-          handleNext()
           return m
         }
         return { ...m, position: next }
       })
     }, 1000)
     return () => clearInterval(positionTimerRef.current)
-  }, [media.isPlaying, media.trackIndex])
+  }, [media.isPlaying, media.duration])
 
   // ── Volume HUD helper ─────────────────────────────────────────────────────
   const showVolumeHUD = useCallback((level) => {
@@ -117,32 +162,38 @@ export default function App() {
 
   // ── Media controls ────────────────────────────────────────────────────────
   const handlePlayPause = useCallback(() => {
-    setMedia(m => ({ ...m, isPlaying: !m.isPlaying }))
-  }, [])
+    if (isElectron && window.electronAPI.mediaCommand) {
+      window.electronAPI.mediaCommand('playpause', null, media.source)
+      setMedia(m => ({ ...m, isPlaying: !m.isPlaying }))
+    }
+  }, [media.source])
 
   const handleNext = useCallback(() => {
-    setMedia(m => {
-      const nextIdx = (m.trackIndex + 1) % TRACKS.length
-      return { ...m, ...TRACKS[nextIdx], trackIndex: nextIdx, position: 0, isPlaying: true }
-    })
-  }, [])
+    if (isElectron && window.electronAPI.mediaCommand) {
+      window.electronAPI.mediaCommand('next', null, media.source)
+    }
+  }, [media.source])
 
   const handlePrev = useCallback(() => {
-    setMedia(m => {
-      if (m.position > 3) return { ...m, position: 0 }
-      const prevIdx = (m.trackIndex - 1 + TRACKS.length) % TRACKS.length
-      return { ...m, ...TRACKS[prevIdx], trackIndex: prevIdx, position: 0 }
-    })
-  }, [])
+    if (isElectron && window.electronAPI.mediaCommand) {
+      window.electronAPI.mediaCommand('prev', null, media.source)
+    }
+  }, [media.source])
 
   const handleVolumeChange = useCallback((level) => {
+    if (isElectron && window.electronAPI.mediaCommand) {
+      window.electronAPI.mediaCommand('volume', level, media.source)
+    }
     setMedia(m => ({ ...m, volume: level }))
     showVolumeHUD(level)
-  }, [showVolumeHUD])
+  }, [showVolumeHUD, media.source])
 
   const handleSeek = useCallback((position) => {
+    if (isElectron && window.electronAPI.mediaCommand) {
+      window.electronAPI.mediaCommand('seek', position, media.source)
+    }
     setMedia(m => ({ ...m, position }))
-  }, [])
+  }, [media.source])
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -171,6 +222,25 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [showVolumeHUD])
 
+  useEffect(() => {
+    if (isElectron && window.electronAPI.setControlCenter) {
+      window.electronAPI.setControlCenter(controlCenterOpen)
+    }
+  }, [controlCenterOpen])
+
+  if (isSettingsRoute) {
+    return (
+      <SettingsPanel 
+        open={true} 
+        onClose={() => window.electronAPI?.closeSettings()} 
+        initialTab={settingsTab} 
+        isStandalone={true}
+        settings={settings}
+        onSettingsChange={setSettings}
+      />
+    )
+  }
+
   return (
     <>
       <NotchBar
@@ -181,10 +251,29 @@ export default function App() {
         onPrev={handlePrev}
         onVolumeChange={handleVolumeChange}
         onSeek={handleSeek}
-        onSettingsOpen={() => setSettingsOpen(true)}
+        onSettingsOpen={() => window.electronAPI?.openSettings('general')}
+        onClipboardOpen={() => setClipboardOpen(true)}
+        onControlCenterOpen={() => setControlCenterOpen(true)}
       />
       <VolumeHUD visible={volumeHUD.visible} level={volumeHUD.level} />
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ClipboardDock open={clipboardOpen} onClose={() => setClipboardOpen(false)} />
+      <ControlCenter 
+        open={controlCenterOpen} 
+        onClose={() => setControlCenterOpen(false)} 
+        onOpenSettings={(tab) => {
+          window.electronAPI?.openSettings(tab || 'general')
+          setControlCenterOpen(false)
+        }}
+        battery={battery}
+        mediaVolume={media.volume}
+        onVolumeChange={handleVolumeChange}
+        allSessions={allSessions}
+        onMediaCommand={(command, value, source) => {
+          if (isElectron && window.electronAPI.mediaCommand) {
+            window.electronAPI.mediaCommand(command, value, source)
+          }
+        }}
+      />
     </>
   )
 }
