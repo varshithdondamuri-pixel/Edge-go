@@ -4,6 +4,14 @@ All notable changes to Edge Go are documented here.
 
 ---
 
+## [v1.1.1] — 2026-05-16
+
+### Patch
+- docs: add `CHANGELOG.md` to repository
+- chore: bump version to 1.1.1 to include changelog in clean release tag
+
+---
+
 ## [v1.1.0] — 2026-05-16
 
 ### Bug Fixes
