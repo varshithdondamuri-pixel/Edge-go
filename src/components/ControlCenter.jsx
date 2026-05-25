@@ -16,13 +16,14 @@ export default function ControlCenter({
   mediaVolume = 50, 
   onVolumeChange,
   allSessions = [],
-  onMediaCommand
+  onMediaCommand,
+  onOpenClipboard,
 }) {
   const [wifi, setWifi] = useState(true)
   const [bluetooth, setBluetooth] = useState(true)
   const [dnd, setDnd] = useState(false)
   const [nightLight, setNightLight] = useState(false)
-  const [airplanMode, setAirplaneMode] = useState(false)
+  const [airplaneMode, setAirplaneMode] = useState(false)
   const [brightness, setBrightness] = useState(72)
   const [showNetworks, setShowNetworks] = useState(false)
   const [connectedNetwork, setConnectedNetwork] = useState(WIFI_NETWORKS[0])
@@ -30,25 +31,28 @@ export default function ControlCenter({
 
   // Sync with system state on open
   useEffect(() => {
-    if (!open) return;
-    
+    if (!open) return
+
     const syncSystemState = async () => {
       if (window.electronAPI?.getSystemState) {
         try {
-          const state = await window.electronAPI.getSystemState();
-          setDnd(state.dnd);
-          setNightLight(state.nightLight);
-          setBrightness(state.brightness);
-          if (state.dnd) setFocusMode('work'); // Map DND to work for visual cue
-          else setFocusMode('off');
+          const state = await window.electronAPI.getSystemState()
+          if (typeof state.wifi === 'boolean') setWifi(state.wifi)
+          if (typeof state.bluetooth === 'boolean') setBluetooth(state.bluetooth)
+          if (typeof state.airplaneMode === 'boolean') setAirplaneMode(state.airplaneMode)
+          setDnd(!!state.dnd)
+          setNightLight(!!state.nightLight)
+          setBrightness(Number.isFinite(state.brightness) ? state.brightness : 72)
+          if (state.dnd) setFocusMode('work')
+          else setFocusMode('off')
         } catch (e) {
-          console.error('Failed to sync system state:', e);
+          console.error('Failed to sync system state:', e)
         }
       }
-    };
+    }
 
-    syncSystemState();
-  }, [open]);
+    syncSystemState()
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -59,25 +63,65 @@ export default function ControlCenter({
 
   if (!open) return null
 
+  const applySystemControl = async (control, value, revert) => {
+    if (!window.electronAPI?.setSystemControl) return true
+    try {
+      const result = await window.electronAPI.setSystemControl(control, value)
+      if (result?.ok === false) {
+        revert?.()
+        return false
+      }
+      return true
+    } catch {
+      revert?.()
+      return false
+    }
+  }
+
   const toggleWifi = () => {
-    if (!wifi) setShowNetworks(false)
-    setWifi(v => !v)
+    const next = !wifi
+    if (!next) setShowNetworks(false)
+    setWifi(next)
+    applySystemControl('wifi', next, () => setWifi(!next))
   }
 
   const toggleDnd = () => {
-    setDnd(v => {
-      const next = !v;
-      if (window.electronAPI?.setDND) window.electronAPI.setDND(next);
-      setFocusMode(next ? 'work' : 'off');
-      return next;
+    const previous = dnd
+    const next = !dnd
+    setDnd(next)
+    setFocusMode(next ? 'work' : 'off')
+    applySystemControl('dnd', next, () => {
+      setDnd(previous)
+      setFocusMode(previous ? 'work' : 'off')
     })
   }
 
   const toggleNightLight = () => {
-    setNightLight(v => {
-      const next = !v;
-      if (window.electronAPI?.setNightLight) window.electronAPI.setNightLight(next);
-      return next;
+    const next = !nightLight
+    setNightLight(next)
+    applySystemControl('nightLight', next, () => setNightLight(!next))
+  }
+
+  const toggleBluetooth = () => {
+    const next = !bluetooth
+    setBluetooth(next)
+    applySystemControl('bluetooth', next, () => setBluetooth(!next))
+  }
+
+  const toggleAirplaneMode = () => {
+    const next = !airplaneMode
+    const prevWifi = wifi
+    const prevBluetooth = bluetooth
+    setAirplaneMode(next)
+    if (next) {
+      setWifi(false)
+      setBluetooth(false)
+      setShowNetworks(false)
+    }
+    applySystemControl('airplaneMode', next, () => {
+      setAirplaneMode(!next)
+      setWifi(prevWifi)
+      setBluetooth(prevBluetooth)
     })
   }
 
@@ -125,17 +169,17 @@ export default function ControlCenter({
                       <div className="cc-media-artist">{session.artist} • {session.source}</div>
                     </div>
                     <div className="cc-media-controls">
-                      <button className="cc-media-btn" onClick={() => onMediaCommand('prev', null, session.source)}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
                       </button>
-                      <button className="cc-media-btn" onClick={() => onMediaCommand('playpause', null, session.source)}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
                         {session.isPlaying ? (
                           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                         ) : (
                           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                         )}
                       </button>
-                      <button className="cc-media-btn" onClick={() => onMediaCommand('next', null, session.source)}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
                       </button>
                     </div>
@@ -173,7 +217,10 @@ export default function ControlCenter({
             {/* Bluetooth */}
             <div
               className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''}`}
-              onClick={() => setBluetooth(v => !v)}
+              onClick={toggleBluetooth}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleBluetooth() }}
             >
               <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
               <div className="cc-tile-info">
@@ -184,13 +231,16 @@ export default function ControlCenter({
 
             {/* Airplane */}
             <div
-              className={`cc-tile cc-tile-half ${airplanMode ? 'active cc-tile-warning' : ''}`}
-              onClick={() => setAirplaneMode(v => !v)}
+              className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''}`}
+              onClick={toggleAirplaneMode}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleAirplaneMode() }}
             >
               <div className="cc-tile-icon">✈️</div>
               <div className="cc-tile-info">
                 <div className="cc-tile-name">Airplane</div>
-                <div className="cc-tile-sub">{airplanMode ? 'On' : 'Off'}</div>
+                <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
               </div>
             </div>
           </div>
@@ -230,10 +280,15 @@ export default function ControlCenter({
                   key={f.id}
                   className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
                   onClick={() => {
-                    setFocusMode(f.id);
-                    const isDnd = f.id !== 'off';
-                    setDnd(isDnd);
-                    if (window.electronAPI?.setDND) window.electronAPI.setDND(isDnd);
+                    const previousMode = focusMode
+                    const previousDnd = dnd
+                    const isDnd = f.id !== 'off'
+                    setFocusMode(f.id)
+                    setDnd(isDnd)
+                    applySystemControl('dnd', isDnd, () => {
+                      setDnd(previousDnd)
+                      setFocusMode(previousMode)
+                    })
                   }}
                   id={`focus-${f.id}`}
                 >
@@ -259,7 +314,7 @@ export default function ControlCenter({
                   onChange={e => {
                     const val = Number(e.target.value);
                     setBrightness(val);
-                    if (window.electronAPI?.setBrightness) window.electronAPI.setBrightness(val);
+                    applySystemControl('brightness', val);
                   }}
                   className="cc-slider"
                   aria-label="Brightness"
@@ -317,7 +372,7 @@ export default function ControlCenter({
               icon="📋"
               label="Clipboard"
               active={false}
-              onClick={onClose}
+              onClick={() => onOpenClipboard?.()}
             />
           </div>
 
@@ -360,7 +415,7 @@ export default function ControlCenter({
 
 function QuickTile({ id, icon, label, active, onClick }) {
   return (
-    <button id={id} className={`qt-tile ${active ? 'active' : ''}`} onClick={onClick}>
+    <button type="button" id={id} className={`qt-tile ${active ? 'active' : ''}`} onClick={onClick}>
       <span className="qt-icon">{icon}</span>
       <span className="qt-label">{label}</span>
     </button>

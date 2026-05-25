@@ -3,6 +3,7 @@ import MusicPlayer from './MusicPlayer.jsx'
 import Clock from './Clock.jsx'
 import BatteryIndicator from './BatteryIndicator.jsx'
 import CalendarMini from './CalendarMini.jsx'
+import SystemMonitor from './SystemMonitor.jsx'
 
 const isElectron = !!window.electronAPI
 
@@ -32,7 +33,7 @@ function SourceConnector({ source }) {
 }
 
 export default function NotchBar({
-  media, battery,
+  media, battery, settings = {}, isOverlayOpen,
   onPlayPause, onNext, onPrev,
   onVolumeChange, onSeek,
   onSettingsOpen,
@@ -40,24 +41,115 @@ export default function NotchBar({
   onControlCenterOpen,
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const collapseTimer = useRef(null)
   const expandTimer = useRef(null)
+  const hoveringRef = useRef(false)
+  const wasOverlayOpenRef = useRef(false)
+  const miniTitle = media.title || 'No media playing'
+
+  const isOverlayOpenRef = useRef(isOverlayOpen)
+  isOverlayOpenRef.current = isOverlayOpen
+
+  const handleControlCenterOpen = useCallback(() => {
+    isOverlayOpenRef.current = true
+    onControlCenterOpen()
+  }, [onControlCenterOpen])
+
+  const handleClipboardOpen = useCallback(() => {
+    isOverlayOpenRef.current = true
+    onClipboardOpen()
+  }, [onClipboardOpen])
+
+  const handleSettingsOpen = useCallback(() => {
+    onSettingsOpen()
+  }, [onSettingsOpen])
+
+  const expandNotch = useCallback(() => {
+    setExpanded(true)
+    if (isElectron) {
+      window.electronAPI.expandWindow('expanded', {
+        expandedWidth: settings.expandedWidth,
+        collapsedWidth: settings.collapsedWidth,
+      })
+    }
+  }, [settings.collapsedWidth, settings.expandedWidth])
+
+  const collapseNotch = useCallback(() => {
+    setExpanded(false)
+    if (isElectron) {
+      window.electronAPI.expandWindow('merged', {
+        collapsedWidth: settings.collapsedWidth,
+      })
+    }
+  }, [settings.collapsedWidth])
 
   const handleMouseEnter = useCallback(() => {
-    if (collapseTimer.current) clearTimeout(collapseTimer.current)
-    expandTimer.current = setTimeout(() => {
-      setExpanded(true)
-      if (isElectron) window.electronAPI.expandWindow(true)
-    }, 80)
-  }, [])
+    hoveringRef.current = true
+    setHovered(true)
+    
+    // Fix flickering by clearing any pending collapse timer immediately upon re-entry
+    if (collapseTimer.current) {
+      clearTimeout(collapseTimer.current)
+      collapseTimer.current = null
+    }
+
+    if (expanded || isOverlayOpenRef.current) return
+
+    if (isElectron) {
+      window.electronAPI.expandWindow('collapsed', {
+        collapsedWidth: settings.collapsedWidth,
+      })
+    }
+
+    if (expandTimer.current) clearTimeout(expandTimer.current)
+    // Expand to full view after 200ms hover
+    expandTimer.current = setTimeout(expandNotch, 200)
+  }, [expanded, expandNotch, settings.collapsedWidth])
 
   const handleMouseLeave = useCallback(() => {
+    hoveringRef.current = false
+    setHovered(false)
+    if (isOverlayOpenRef.current) return
+    
+    if (expandTimer.current) {
+      clearTimeout(expandTimer.current)
+      expandTimer.current = null
+    }
+    
+    if (collapseTimer.current) clearTimeout(collapseTimer.current)
+    collapseTimer.current = setTimeout(collapseNotch, 400) // smooth transition to merged state
+  }, [collapseNotch])
+
+  const handleClick = useCallback((event) => {
+    if (expanded || isOverlayOpenRef.current) return
+    if (event.target.closest('button,input,select,a')) return
     if (expandTimer.current) clearTimeout(expandTimer.current)
-    collapseTimer.current = setTimeout(() => {
-      setExpanded(false)
-      if (isElectron) window.electronAPI.expandWindow(false)
-    }, 400)
-  }, [])
+    expandNotch()
+  }, [expanded, expandNotch])
+
+
+  useEffect(() => {
+    if (isOverlayOpen) {
+      wasOverlayOpenRef.current = true
+      setExpanded(true)
+      if (isElectron) {
+        window.electronAPI.expandWindow('expanded', {
+          expandedWidth: settings.expandedWidth,
+          collapsedWidth: settings.collapsedWidth,
+        })
+      }
+      return
+    }
+
+    if (wasOverlayOpenRef.current) {
+      wasOverlayOpenRef.current = false
+      if (!hoveringRef.current) {
+        if (collapseTimer.current) clearTimeout(collapseTimer.current)
+        collapseTimer.current = setTimeout(collapseNotch, 220)
+      }
+    }
+  }, [isOverlayOpen, settings.expandedWidth, settings.collapsedWidth, collapseNotch])
 
   useEffect(() => {
     return () => {
@@ -69,108 +161,132 @@ export default function NotchBar({
   return (
     <div className="notch-wrapper">
       <div
-        className={`notch-bar ${expanded ? 'expanded' : 'collapsed'}`}
+        className={`notch-trigger-area ${expanded ? 'expanded' : (hovered ? 'collapsed' : 'merged')}`}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        {/* Drag region */}
-        <div className="notch-drag" />
+        <div
+          className={[
+            'notch-bar',
+            expanded ? 'expanded' : (hovered ? 'collapsed' : 'merged'),
+            settings.glowEffect === false ? 'no-glow' : '',
+            settings.enableWindowShadow === false ? 'no-shadow' : '',
+            settings.transparencyEffects === false ? 'solid' : '',
+          ].filter(Boolean).join(' ')}
+          onClick={handleClick}
+        >
+          {/* Drag region */}
+          <div className="notch-drag" />
 
-        {/* ── COLLAPSED VIEW ── */}
-        <div className="notch-collapsed-view" aria-hidden={expanded}>
-          <div className="ncv-left">
-            <div className="mini-album-art">
-              {media.albumArt
-                ? <img src={media.albumArt} alt={media.album} />
-                : <span className="mini-album-emoji">♪</span>
-              }
-            </div>
-            <AudioVizMini isPlaying={media.isPlaying} />
-            <div className="mini-track-name">
-              <span className={media.title.length > 16 ? 'scroll-text' : ''}>
-                {media.title}
-              </span>
-            </div>
-            {/* Mini source pill */}
-            {media.source && (
-              <span className="mini-source-pill">{media.source}</span>
-            )}
-          </div>
-          <div className="ncv-right">
-            <Clock mini />
-            <BatteryMini battery={battery} />
-          </div>
-        </div>
-
-        {/* ── EXPANDED VIEW ── */}
-        <div className="notch-expanded-view" aria-hidden={!expanded}>
-          {/* LEFT: Music player with Spotify connector */}
-          <div className="notch-left-panel">
-            {/* Source connector bar */}
-            {media.source && (
-              <SourceConnector source={media.source} />
-            )}
-            <MusicPlayer
-              media={media}
-              onPlayPause={onPlayPause}
-              onNext={onNext}
-              onPrev={onPrev}
-              onVolumeChange={onVolumeChange}
-              onSeek={onSeek}
-            />
-          </div>
-
-          <div className="notch-divider" role="separator" />
-
-          {/* RIGHT: Clock, battery, calendar, connectors */}
-          <div className="notch-right-panel">
-            <div className="nrp-top">
-              <Clock />
-              <div className="nrp-actions">
-                {/* Clipboard dock button */}
-                <button
-                  id="btn-clipboard"
-                  className="connector-btn"
-                  onClick={onClipboardOpen}
-                  aria-label="Open clipboard"
-                  title="Clipboard"
-                >
-                  <ClipIcon />
-                </button>
-                <button
-                  id="btn-settings"
-                  className="gear-btn"
-                  onClick={onSettingsOpen}
-                  aria-label="Open settings"
-                  title="Settings"
-                >
-                  <GearIcon />
-                </button>
+          {/* ── COLLAPSED VIEW ── */}
+          <div className="notch-collapsed-view" aria-hidden={expanded}>
+            <div className="ncv-left">
+              <div className="mini-album-art">
+                {media.albumArt
+                  ? <img src={media.albumArt} alt={media.album} />
+                  : <span className="mini-album-emoji">♪</span>
+                }
               </div>
-            </div>
-
-            <BatteryIndicator battery={battery} />
-
-            {/* Calendar connector */}
-            <div className="calendar-connector">
-              <div className="cal-connector-header">
-                <span className="cal-connector-icon">📅</span>
-                <span className="cal-connector-label">Calendar</span>
+              <AudioVizMini isPlaying={media.isPlaying} />
+              <div className="mini-track-name">
+                <span className={miniTitle.length > 16 ? 'scroll-text' : ''}>
+                  {miniTitle}
+                </span>
               </div>
-              <CalendarMini />
+              {/* Mini source pill */}
+              {media.source && (
+                <span className="mini-source-pill">{media.source}</span>
+              )}
             </div>
-
-            {/* Connector pills row */}
-            <div className="connector-pills">
-              <ConnectorPill icon="🎛️" label="Controls" onClick={onControlCenterOpen} id="pill-cc" />
-              <ConnectorPill icon="📋" label="Clipboard" onClick={onClipboardOpen} id="pill-clipboard" />
-              <ConnectorPill icon="⚙️" label="Settings" onClick={onSettingsOpen} id="pill-settings" />
+            <div className="ncv-right">
+              <Clock mini settings={settings} />
+              {settings.showBattery !== false && <BatteryMini battery={battery} settings={settings} />}
             </div>
           </div>
-        </div>
 
-        {/* Ambient bottom indicator */}
-        <div className="notch-indicator" />
+          {/* ── EXPANDED VIEW ── */}
+          <div className="notch-expanded-view" aria-hidden={!expanded}>
+            {/* LEFT: Music player with Spotify connector */}
+            <div className="notch-left-panel">
+              {/* Source connector bar */}
+              {settings.showSource !== false && media.source && (
+                <SourceConnector source={media.source} />
+              )}
+              <MusicPlayer
+                media={media}
+                settings={settings}
+                onPlayPause={onPlayPause}
+                onNext={onNext}
+                onPrev={onPrev}
+                onVolumeChange={onVolumeChange}
+                onSeek={onSeek}
+              />
+            </div>
+
+            <div className="notch-divider" role="separator" />
+
+            {/* RIGHT: Clock, battery, system monitor, calendar, connectors */}
+            <div className="notch-right-panel">
+              <div className="nrp-top">
+                <Clock settings={settings} />
+                <div className="nrp-actions">
+                  {/* Control Center button */}
+                  {settings.controlCenterEnabled !== false && (
+                    <button
+                      id="btn-cc"
+                      className="connector-btn"
+                      onClick={handleControlCenterOpen}
+                      aria-label="Open control center"
+                      title="Control Center"
+                    >
+                      <ControlsIcon />
+                    </button>
+                  )}
+                  {/* Clipboard dock button */}
+                  {settings.clipboardEnabled !== false && (
+                    <button
+                      id="btn-clipboard"
+                      className="connector-btn"
+                      onClick={handleClipboardOpen}
+                      aria-label="Open clipboard"
+                      title="Clipboard"
+                    >
+                      <ClipIcon />
+                    </button>
+                  )}
+                  <button
+                    id="btn-settings"
+                    className="gear-btn"
+                    onClick={handleSettingsOpen}
+                    aria-label="Open settings"
+                    title="Settings"
+                  >
+                    <GearIcon />
+                  </button>
+                </div>
+              </div>
+
+              {settings.showSystemMonitor !== false && (
+                <SystemMonitor settings={settings} />
+              )}
+
+              {settings.calendarConnector !== false && settings.showCalendar !== false && (
+                <div className="calendar-connector">
+                  <div className="cal-connector-header">
+                    <span className="cal-connector-icon">📅</span>
+                    <span className="cal-connector-label">Calendar</span>
+                  </div>
+                  <CalendarMini settings={settings} />
+                </div>
+              )}
+
+
+            </div>
+          </div>
+
+          {/* Ambient bottom indicator */}
+          <div className="notch-indicator" />
+        </div>
       </div>
     </div>
   )
@@ -181,7 +297,6 @@ function ConnectorPill({ icon, label, onClick, id }) {
   return (
     <button id={id} className="conn-pill" onClick={onClick} title={label}>
       <span className="conn-pill-icon">{icon}</span>
-      <span className="conn-pill-label">{label}</span>
     </button>
   )
 }
@@ -200,7 +315,8 @@ function AudioVizMini({ isPlaying }) {
 }
 
 function BatteryMini({ battery }) {
-  const { level, charging } = battery
+  const { level, charging, available } = battery
+  if (!available) return null
   const colorClass = level > 60 ? 'high' : level > 20 ? 'mid' : 'low'
   return (
     <div className="battery-mini" title={`${level}%${charging ? ' · Charging' : ''}`}>
@@ -238,6 +354,14 @@ function ClipIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+    </svg>
+  )
+}
+
+function ControlsIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h6V7h-6V5h-2v6h2V9z"/>
     </svg>
   )
 }

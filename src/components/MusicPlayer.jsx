@@ -9,10 +9,21 @@ function formatTime(secs) {
 }
 
 export default function MusicPlayer({
-  media, onPlayPause, onNext, onPrev, onVolumeChange, onSeek,
+  media, settings = {}, onPlayPause, onNext, onPrev, onVolumeChange, onSeek,
 }) {
-  const { title, artist, source, albumArt, isPlaying, volume, position, duration } = media
+  const {
+    title = 'No media playing',
+    artist = 'Start audio in any Windows media app',
+    source,
+    albumArt,
+    isPlaying,
+    volume,
+    position,
+    duration,
+  } = media
   const progressRef = useRef(null)
+  const displayTitle = title || 'No media playing'
+  const displayArtist = artist || 'Start audio in any Windows media app'
 
   const handleProgressClick = (e) => {
     if (!progressRef.current || !duration) return
@@ -27,51 +38,57 @@ export default function MusicPlayer({
     <div className="music-player">
       {/* Album art + info */}
       <div className="mp-top">
-        <div className="album-art">
-          {albumArt
-            ? <img src={albumArt} alt={`${title} album art`} />
-            : <div className="album-art-placeholder"><span>🎵</span></div>
-          }
-        </div>
+        {settings.showAlbumArt !== false && (
+          <div className="album-art">
+            {albumArt
+              ? <img src={albumArt} alt={`${displayTitle} album art`} />
+              : <div className="album-art-placeholder"><span>🎵</span></div>
+            }
+          </div>
+        )}
 
         <div className="mp-info">
-          <div className="mp-title" title={title}>{title}</div>
-          <div className="mp-artist" title={artist}>{artist}</div>
+          <div className="mp-title" title={displayTitle}>{displayTitle}</div>
+          <div className="mp-artist" title={displayArtist}>{displayArtist}</div>
           {source && <div className="mp-source">{source}</div>}
         </div>
 
         {/* Visualizer */}
-        <div className={`visualizer ${isPlaying ? 'playing' : 'paused'}`} aria-hidden="true">
-          {Array.from({ length: NUM_BARS }, (_, i) => (
-            <div
-              key={i}
-              className="viz-bar"
-              style={{ animationDuration: `${0.35 + (i % 4) * 0.12}s` }}
-            />
-          ))}
-        </div>
+        {settings.showVisualizer !== false && (
+          <div className={`visualizer ${isPlaying ? 'playing' : 'paused'}`} aria-hidden="true">
+            {Array.from({ length: NUM_BARS }, (_, i) => (
+              <div
+                key={i}
+                className="viz-bar"
+                style={{ animationDuration: `${0.35 + (i % 4) * 0.12}s` }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Progress bar */}
-      <div className="mp-progress-row">
-        <span className="mp-time">{formatTime(position)}</span>
-        <div
-          ref={progressRef}
-          className="mp-progress-track"
-          onClick={handleProgressClick}
-          role="slider"
-          aria-label="Track position"
-          aria-valuemin={0}
-          aria-valuemax={duration}
-          aria-valuenow={position}
-          tabIndex={0}
-        >
-          <div className="mp-progress-fill" style={{ width: `${progressPct}%` }}>
-            <div className="mp-progress-thumb" />
+      {settings.showProgressBar !== false && (
+        <div className="mp-progress-row">
+          <span className="mp-time">{formatTime(position)}</span>
+          <div
+            ref={progressRef}
+            className="mp-progress-track"
+            onClick={handleProgressClick}
+            role="slider"
+            aria-label="Track position"
+            aria-valuemin={0}
+            aria-valuemax={duration}
+            aria-valuenow={position}
+            tabIndex={0}
+          >
+            <div className="mp-progress-fill" style={{ width: `${progressPct}%` }}>
+              <div className="mp-progress-thumb" />
+            </div>
           </div>
+          <span className="mp-time">{formatTime(duration)}</span>
         </div>
-        <span className="mp-time">{formatTime(duration)}</span>
-      </div>
+      )}
 
       {/* Controls + volume */}
       <div className="mp-controls">

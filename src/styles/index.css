@@ -1,9 +1,55 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-/* ── Light mode (default) theme tokens ── */
+/* ── Dark glassmorphism — DEFAULT (spec: 70% opacity black, blur 20px) ── */
 :root{
+  /* Notch glassmorphism surface */
+  --notch-glass-bg: rgba(0,0,0,0.72);
+  --notch-glass-border: rgba(255,255,255,0.10);
+  --notch-glass-blur: 20px;
+  --notch-glass-shadow: 0 16px 48px rgba(0,0,0,0.85), 0 4px 16px rgba(0,0,0,0.60), 0 0 0 0.5px rgba(255,255,255,0.06);
+
+  /* App surface tokens — dark by default */
+  --color-bg: #000000;
+  --color-surface: rgba(14,14,18,0.96);
+  --color-surface-hover: rgba(22,22,28,1);
+  --color-border: rgba(255,255,255,0.08);
+  --color-border-hover: rgba(255,255,255,0.14);
+  --color-text-primary: #f0f0f5;
+  --color-text-secondary: rgba(240,240,245,0.58);
+  --color-text-muted: rgba(240,240,245,0.33);
+  --color-accent: #7c6af7;
+  --color-accent-glow: rgba(124,106,247,0.35);
+  --color-accent-2: #f472b6;
+  --color-success: #4ade80;
+  --color-warning: #facc15;
+  --color-danger: #f87171;
+  --font-family: 'Outfit', 'Inter', "Segoe UI", Roboto, sans-serif;
+  --radius-pill: 999px;
+  --radius-lg: 18px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --transition-fast: 150ms cubic-bezier(0.4,0,0.2,1);
+  --transition-smooth: 300ms cubic-bezier(0.4,0,0.2,1);
+  --transition-spring: 420ms cubic-bezier(0.16,1,0.3,1);
+  --notch-ease: cubic-bezier(0.16,1,0.3,1);
+  --shadow-notch: 0 16px 48px rgba(0,0,0,0.80), 0 4px 16px rgba(0,0,0,0.55);
+  --shadow-glow: 0 0 32px rgba(124,106,247,0.28);
+  /* Dynamic variables from settings */
+  --notch-radius: 20px;
+  --notch-collapsed-width: 300px;
+  --notch-expanded-width: 620px;
+  --notch-blur: 20px;
+  --notch-anim-speed: 480ms;
+  --is-dark: 1;
+}
+
+/* ── Light mode overrides ── */
+:root:not(.dark) {
+  --notch-glass-bg: rgba(255,255,255,0.85);
+  --notch-glass-border: rgba(0,0,0,0.10);
+  --notch-glass-shadow: 0 8px 32px rgba(0,0,0,0.15);
   --color-bg: #f0f0f5;
   --color-surface: rgba(255,255,255,0.92);
   --color-surface-hover: rgba(255,255,255,1);
@@ -12,57 +58,28 @@
   --color-text-primary: #0a0a0f;
   --color-text-secondary: rgba(10,10,15,0.60);
   --color-text-muted: rgba(10,10,15,0.38);
-  --color-accent: #7c6af7;
-  --color-accent-glow: rgba(124,106,247,0.28);
-  --color-accent-2: #f472b6;
   --color-success: #16a34a;
   --color-warning: #d97706;
   --color-danger: #dc2626;
-  --font-family: 'Inter', "Segoe UI", Roboto, sans-serif;
-  --radius-pill: 999px;
-  --radius-lg: 18px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
-  --transition-fast: 150ms cubic-bezier(0.4,0,0.2,1);
-  --transition-smooth: 320ms cubic-bezier(0.4,0,0.2,1);
-  --transition-spring: 500ms cubic-bezier(0.34,1.56,0.64,1);
   --shadow-notch: 0 8px 32px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.08);
   --shadow-glow: 0 0 24px rgba(124,106,247,0.20);
-  /* Dynamic variables from settings */
-  --notch-radius: 20px;
-  --notch-collapsed-width: 180px;
-  --notch-expanded-width: 680px;
-  --notch-blur: 32px;
-  --notch-anim-speed: 520ms;
   --is-dark: 0;
 }
 
-/* ── Dark mode overrides ── */
+/* .dark class keeps root defaults (already dark) */
 .dark {
-  --color-bg: #000000;
   --color-surface: rgba(12,12,14,0.99);
   --color-surface-hover: rgba(24,24,28,1);
-  --color-border: rgba(255,255,255,0.08);
-  --color-border-hover: rgba(255,255,255,0.15);
-  --color-text-primary: #ffffff;
-  --color-text-secondary: rgba(255,255,255,0.60);
-  --color-text-muted: rgba(255,255,255,0.35);
-  --color-success: #4ade80;
-  --color-warning: #facc15;
-  --color-danger: #f87171;
-  --shadow-notch: 0 8px 32px rgba(0,0,0,0.80),0 2px 8px rgba(0,0,0,0.60);
-  --shadow-glow: 0 0 24px rgba(124,106,247,0.25);
-  --is-dark: 1;
+  --shadow-notch: 0 16px 48px rgba(0,0,0,0.88),0 4px 16px rgba(0,0,0,0.60);
 }
 
 html,body,#root{
   width:100%;height:100%;
-  background:#000000;
+  background:transparent;
   overflow:hidden;
   font-family:var(--font-family);
   -webkit-font-smoothing:antialiased;
   user-select:none;
-  /* Force dark background immediately so no white flash on startup */
 }
 
 /* Settings window gets its own background via .settings-root class */
@@ -75,82 +92,130 @@ html,body,#root{
    The Electron window is sized to fit the pill, so this is just a flex positioner. */
 .notch-wrapper{
   position:fixed;top:0;left:0;
-  width:100vw;height:0;
+  width:100vw;height:100vh;
   display:flex;justify-content:center;align-items:flex-start;
   pointer-events:none;
   overflow:visible;
 }
 
+.notch-trigger-area {
+  pointer-events: all;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow: visible;
+  background: rgba(0, 0, 0, 0.01) !important;
+  transition:
+    width var(--notch-anim-speed) var(--notch-ease),
+    height var(--notch-anim-speed) var(--notch-ease);
+}
+
+.notch-trigger-area.merged {
+  width: 300px;
+  height: 36px;
+}
+
+.notch-trigger-area.collapsed {
+  width: var(--notch-collapsed-width);
+  height: 36px;
+}
+
+.notch-trigger-area.expanded {
+  width: var(--notch-expanded-width);
+  height: 230px;
+}
+
 .notch-bar {
   pointer-events: all;
   position: relative;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-top: none;
-  border-radius: 0 0 var(--notch-radius) var(--notch-radius);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+  border-radius: 0 0 var(--notch-radius) var(--notch-radius) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
   overflow: hidden;
-  backdrop-filter: blur(var(--notch-blur)) saturate(180%);
-  -webkit-backdrop-filter: blur(var(--notch-blur)) saturate(180%);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   transition:
-    width var(--notch-anim-speed) cubic-bezier(0.34, 1.56, 0.64, 1),
-    height var(--notch-anim-speed) cubic-bezier(0.34, 1.56, 0.64, 1),
+    width var(--notch-anim-speed) var(--notch-ease),
+    height var(--notch-anim-speed) var(--notch-ease),
     border-radius var(--transition-smooth),
     box-shadow var(--transition-smooth),
     background var(--transition-smooth),
-    border-color var(--transition-smooth),
-    backdrop-filter var(--transition-smooth);
+    border-color var(--transition-smooth);
   will-change: width, height, transform;
 }
 
-.dark .notch-bar {
-  background: #000000;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: none;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
+/* ── Merged: 120×10px camera notch ── */
+.notch-bar.merged {
+  width: 120px;
+  height: 10px;
+  border-radius: 0 0 10px 10px !important;
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
+  cursor: pointer;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
-/* ── Collapsed: always a solid black pill — looks like part of the screen edge ── */
+
+
+/* Light mode merged */
+:root:not(.dark) .notch-bar.merged {
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+}
+
+/* ── Collapsed: 300×36px spec-exact pill ── */
 .notch-bar.collapsed {
   width: var(--notch-collapsed-width);
-  height: 30px;
-  border-radius: 0 0 var(--notch-radius) var(--notch-radius);
-  /* Always solid black — dark mode default, merges with top edge */
-  background: #000000;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-  border: 1px solid rgba(255,255,255,0.06);
-  border-top: none;
+  height: 36px;
+  border-radius: 0 0 var(--notch-radius) var(--notch-radius) !important;
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   overflow: hidden;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   transition:
-    width var(--notch-anim-speed) cubic-bezier(0.34,1.56,0.64,1),
-    height var(--notch-anim-speed) cubic-bezier(0.34,1.56,0.64,1),
+    width var(--notch-anim-speed) var(--notch-ease),
+    height var(--notch-anim-speed) var(--notch-ease),
     box-shadow var(--transition-smooth),
-    border-color var(--transition-smooth);
+    border-color var(--transition-smooth),
+    background var(--transition-smooth);
 }
 
-/* Light mode: pill is still very dark so it looks like a camera cutout */
+/* Light mode collapsed: very dark pill simulates camera notch */
 :root:not(.dark) .notch-bar.collapsed {
-  background: #111111;
-  border-color: rgba(0,0,0,0.2);
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
 }
 
-/* Hover: grow slightly, glow, show contents */
+/* Hover: subtle grow + glow + reveal contents */
 .notch-bar.collapsed:hover {
-  height: 40px;
-  width: calc(var(--notch-collapsed-width) + 40px);
-  background: #0a0a0a;
-  border-color: rgba(255,255,255,0.12);
-  box-shadow:
-    0 8px 32px rgba(0,0,0,0.8),
-    0 0 16px var(--color-accent-glow);
+  background: #000000 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 
-/* ── Collapsed content: hidden by default, fades in on hover ── */
+/* ── Collapsed content ── */
 .notch-collapsed-view {
   display: flex;
   align-items: center;
@@ -159,19 +224,20 @@ html,body,#root{
   height: 100%;
   padding: 0 12px;
   gap: 6px;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   transition: opacity 200ms ease;
 }
 
 /* Reveal on hover */
 .notch-bar.collapsed:hover .notch-collapsed-view {
   opacity: 1;
-  pointer-events: all;
+  pointer-events: auto;
 }
 
-/* Hide when expanded (content replaced by expanded view) */
-.notch-bar.expanded .notch-collapsed-view {
+/* Hide when expanded or merged */
+.notch-bar.expanded .notch-collapsed-view,
+.notch-bar.merged .notch-collapsed-view {
   opacity: 0;
   pointer-events: none;
   position: absolute;
@@ -186,7 +252,15 @@ html,body,#root{
 
 .notch-drag{
   position:absolute;top:0;left:0;right:0;height:10px;
-  -webkit-app-region:drag;cursor:grab;z-index:10;
+  cursor:grab;z-index:10;
+  -webkit-app-region: no-drag;
+}
+.notch-bar.expanded .notch-drag {
+  -webkit-app-region: drag;
+}
+.notch-bar:not(.expanded) .notch-drag {
+  -webkit-app-region: no-drag;
+  pointer-events: none;
 }
 
 .ncv-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
@@ -536,6 +610,7 @@ html,body,#root{
   box-shadow:0 1px 5px rgba(0,0,0,0.5);
 }
 .settings-toggle.on::after{transform:translateX(17px);}
+.settings-toggle:disabled{opacity:0.45;cursor:not-allowed;}
 
 /* Select */
 .settings-select{
@@ -648,20 +723,37 @@ html,body,#root{
 /* ── NOTCH EXPANDED SIZE ── */
 .notch-bar.expanded{
   width: var(--notch-expanded-width);
-  height:185px;
-  border-radius:0 0 var(--notch-radius) var(--notch-radius);
-  background: rgba(255,255,255,0.90);
-  backdrop-filter: blur(var(--notch-blur)) saturate(200%);
-  -webkit-backdrop-filter: blur(var(--notch-blur)) saturate(200%);
-  border-color: rgba(0,0,0,0.10);
-  box-shadow: var(--shadow-notch), 0 0 40px rgba(0,0,0,0.08);
-  animation: glowPulse 2s ease-in-out 0.3s 1;
+  height: 186px;
+  border-radius: 0 0 var(--notch-radius) var(--notch-radius) !important;
+  background: #000000 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: none !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
+  animation: none !important;
 }
 
-.dark .notch-bar.expanded{
-  background: rgba(10,10,12,0.92);
-  border-color: rgba(255,255,255,0.12);
-  box-shadow: var(--shadow-notch), 0 0 40px rgba(0,0,0,0.5);
+.notch-bar.no-glow {
+  animation: none;
+}
+
+.notch-bar.no-shadow {
+  box-shadow: none;
+}
+
+.notch-bar.solid {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.reduce-motion .notch-bar,
+.reduce-motion .notch-bar *,
+.reduce-motion .cc-panel,
+.reduce-motion .clip-dock,
+.reduce-motion .settings-panel {
+  animation-duration: 0ms !important;
+  transition-duration: 0ms !important;
 }
 
 /* ── SOURCE CONNECTOR ── */
@@ -713,6 +805,11 @@ html,body,#root{
   color:var(--color-accent);
 }
 .cal-year-label{font-size:8px;color:var(--color-text-muted);font-weight:500;}
+.cal-week-number{
+  margin-left:auto;font-size:8px;font-weight:700;color:var(--color-text-muted);
+  background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);
+  padding:1px 5px;border-radius:var(--radius-pill);
+}
 
 .cal-days-grid{display:flex;flex-direction:column;gap:2px;}
 .cal-day-names{display:flex;gap:3px;}
@@ -736,22 +833,49 @@ html,body,#root{
 .connector-btn:active{transform:scale(0.9);}
 
 /* ── CONNECTOR PILLS ── */
-.connector-pills{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px;}
+.connector-pills{display:flex;gap:6px;align-items:center;margin-top:6px;}
 .conn-pill{
-  display:flex;align-items:center;gap:3px;
-  padding:3px 7px;border-radius:var(--radius-pill);
+  display:flex;align-items:center;justify-content:center;
+  width:26px;height:26px;border-radius:50%;
   background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.07);
-  cursor:pointer;color:var(--color-text-muted);font-family:var(--font-family);
-  font-size:9px;font-weight:600;
+  cursor:pointer;
+  font-family:var(--font-family);
   transition:all var(--transition-fast);
+  flex-shrink:0;
 }
-.conn-pill:hover{
-  background:rgba(124,106,247,0.12);border-color:rgba(124,106,247,0.3);
-  color:var(--color-accent);transform:translateY(-1px);
+.conn-pill:active{transform:scale(0.93);}
+.conn-pill-icon{font-size:11px;line-height:1;}
+
+#pill-cc {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #3b82f6;
 }
-.conn-pill:active{transform:translateY(0) scale(0.97);}
-.conn-pill-icon{font-size:10px;line-height:1;}
-.conn-pill-label{letter-spacing:0.2px;}
+#pill-cc:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.45);
+  transform: translateY(-1px);
+}
+#pill-clipboard {
+  background: rgba(244, 114, 182, 0.15);
+  border-color: rgba(244, 114, 182, 0.25);
+  color: #f472b6;
+}
+#pill-clipboard:hover {
+  background: rgba(244, 114, 182, 0.25);
+  border-color: rgba(244, 114, 182, 0.45);
+  transform: translateY(-1px);
+}
+#pill-settings {
+  background: rgba(250, 204, 21, 0.15);
+  border-color: rgba(250, 204, 21, 0.25);
+  color: #facc15;
+}
+#pill-settings:hover {
+  background: rgba(250, 204, 21, 0.25);
+  border-color: rgba(250, 204, 21, 0.45);
+  transform: translateY(-1px);
+}
 
 /* ── CLIPBOARD DOCK ── */
 .clip-backdrop{
@@ -762,7 +886,7 @@ html,body,#root{
 }
 
 .clip-dock{
-  position:fixed;top:50px;left:50%;transform:translateX(-50%);
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);
   width:360px;max-height:440px;
   background: var(--color-surface);
   border:1px solid var(--color-border-hover);
@@ -771,6 +895,9 @@ html,body,#root{
   backdrop-filter:blur(48px) saturate(200%);-webkit-backdrop-filter:blur(48px) saturate(200%);
   z-index:8600;display:flex;flex-direction:column;overflow:hidden;
   animation:dockSlideIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
+}
+.platform-darwin .clip-dock {
+  top: 38px;
 }
 @keyframes dockSlideIn{
   from{opacity:0;transform:translateX(-50%) translateY(-14px) scale(0.95)}
@@ -1161,7 +1288,7 @@ html,body,#root{
 
 .cc-panel {
   position: fixed;
-  top: 52px;
+  top: 8px;
   right: 16px;
   width: 360px;
   background: rgba(255, 255, 255, 0.85);
@@ -1175,6 +1302,9 @@ html,body,#root{
   animation: ccSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+.platform-darwin .cc-panel {
+  top: 38px;
 }
 
 .dark .cc-panel {
@@ -1764,4 +1894,86 @@ html,body,#root{
 .cc-media-btn svg {
   width: 14px;
   height: 14px;
+}
+
+/* ── SYSTEM MONITOR ── */
+.sys-monitor{
+  display:flex;flex-direction:column;gap:4px;
+}
+.sm-header{
+  display:flex;align-items:center;gap:4px;margin-bottom:1px;
+}
+.sm-icon{font-size:9px;line-height:1;}
+.sm-label{
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;
+  color:var(--color-text-muted);
+}
+.sm-row{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;
+}
+.sm-row-left{
+  display:flex;align-items:center;gap:4px;min-width:0;
+}
+.sm-metric-label{
+  font-size:9px;font-weight:600;color:var(--color-text-secondary);
+  min-width:22px;
+}
+.sm-sparkline{
+  display:flex;align-items:flex-end;gap:1.5px;height:14px;
+}
+.sm-spark-bar{
+  width:3px;border-radius:1px;
+  transition:height 0.4s ease;
+}
+.sm-row-right{
+  display:flex;align-items:center;gap:5px;flex:1;justify-content:flex-end;
+}
+.sm-bar-outer{
+  flex:1;height:3px;background:rgba(255,255,255,0.10);border-radius:2px;overflow:hidden;
+  max-width:60px;
+}
+.sm-bar-fill{
+  height:100%;border-radius:2px;
+  transition:width 0.6s cubic-bezier(0.4,0,0.2,1),background 0.4s ease;
+}
+.sm-pct{
+  font-size:9px;font-weight:600;color:var(--color-text-muted);
+  font-variant-numeric:tabular-nums;white-space:nowrap;min-width:28px;text-align:right;
+}
+
+/* ── ACCENT PRESETS (settings) ── */
+.accent-presets{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0;}
+.accent-dot{
+  width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent;
+  transition:all var(--transition-fast);flex-shrink:0;
+}
+.accent-dot:hover{transform:scale(1.15);}
+.accent-dot.selected{border-color:white;box-shadow:0 0 0 2px var(--color-accent),0 0 8px rgba(124,106,247,0.5);}
+
+/* ── SHORTCUT STYLES (settings) ── */
+.shortcut-row{display:flex;align-items:center;gap:6px;}
+.shortcut-keys{display:flex;gap:4px;}
+.kbd{
+  background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);
+  border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;
+  color:var(--color-text-secondary);font-family:var(--font-family);
+}
+.shortcut-clear{
+  background:none;border:none;color:var(--color-text-muted);cursor:pointer;
+  font-size:10px;padding:2px 4px;border-radius:4px;
+  transition:all var(--transition-fast);
+}
+.shortcut-clear:hover{color:var(--color-danger);background:rgba(248,113,113,0.08);}
+.shortcut-record-btn{
+  background:rgba(124,106,247,0.12);border:1px solid rgba(124,106,247,0.25);
+  color:var(--color-accent);font-size:11px;padding:4px 10px;border-radius:6px;
+  cursor:pointer;font-family:var(--font-family);
+  transition:all var(--transition-fast);
+}
+.shortcut-record-btn:hover{background:rgba(124,106,247,0.22);}
+
+/* ── ABOUT FOOTER ── */
+.about-footer{
+  text-align:center;font-size:10px;color:var(--color-text-muted);
+  padding-top:12px;border-top:1px solid var(--color-border);
 }

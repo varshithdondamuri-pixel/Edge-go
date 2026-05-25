@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-export default function Clock({ mini = false }) {
+export default function Clock({ mini = false, settings = {} }) {
   const [now, setNow] = useState(new Date())
 
   useEffect(() => {
@@ -11,12 +11,12 @@ export default function Clock({ mini = false }) {
   if (mini) {
     return (
       <time className="clock-mini" dateTime={now.toISOString()}>
-        {formatMini(now)}
+        {formatMini(now, settings.use24h !== false)}
       </time>
     )
   }
 
-  const { time, ampm } = formatFull(now)
+  const { time, ampm } = formatFull(now, settings.use24h !== false)
   return (
     <div className="clock-expanded">
       <time className="clock-time" dateTime={now.toISOString()}>
@@ -27,17 +27,21 @@ export default function Clock({ mini = false }) {
   )
 }
 
-function formatMini(date) {
+function formatMini(date, use24h) {
   let h = date.getHours()
   const m = date.getMinutes().toString().padStart(2, '0')
+  if (use24h) return `${h.toString().padStart(2, '0')}:${m}`
+  
   const ampm = h >= 12 ? 'PM' : 'AM'
   h = h % 12 || 12
   return `${h}:${m} ${ampm}`
 }
 
-function formatFull(date) {
+function formatFull(date, use24h) {
   let h = date.getHours()
   const m = date.getMinutes().toString().padStart(2, '0')
+  if (use24h) return { time: `${h.toString().padStart(2, '0')}:${m}`, ampm: '' }
+  
   const ampm = h >= 12 ? 'PM' : 'AM'
   h = h % 12 || 12
   return { time: `${h}:${m}`, ampm }

@@ -1,4 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
+import {
+  applySettingsToDocument,
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  saveStoredSettings,
+} from '../defaultSettings.js'
 
 // ─── Sidebar nav ─────────────────────────────────────────────────────────────
 const NAV = [
@@ -14,75 +20,17 @@ const NAV = [
   { id: 'about',       icon: 'ℹ️',  label: 'About' },
 ]
 
-const DEFAULT_SETTINGS = {
-  // General
-  launchAtStartup: false,
-  alwaysOnTop: true,
-  showInTaskbar: false,
-  notchPosition: 'center',
-  use24h: true,
-  language: 'en',
-
-  // Appearance
-  accentColor: '#7c6af7',
-  glowEffect: true,
-  blurIntensity: 'medium',
-  cornerRadius: 20,
-  collapsedWidth: 320,
-  expandedWidth: 680,
-  animationSpeed: 'normal',
-  darkMode: true,
-  enableWindowShadow: true,
-
-  // Media
-  showAlbumArt: true,
-  showVisualizer: true,
-  showSource: true,
-  showProgressBar: true,
-  volumeHUDEnabled: true,
-  sneakPeek: true,
-  mediaPollingInterval: 5,
-
-  // Calendar
-  showCalendar: true,
-  showDayNames: true,
-  weekStartsMonday: false,
-  showWeekNumbers: false,
-
-  // HUDs
-  volumeHUD: true,
-  brightnessHUD: true,
-  batteryHUD: true,
-  hudPosition: 'bottom-center',
-
-  // Battery
-  showBattery: true,
-  showBatteryPct: true,
-  showPowerIcons: true,
-  batteryNotifications: true,
-
-  // Connectors
-  spotifyEnabled: true,
-  youtubeEnabled: true,
-  calendarConnector: true,
-  clipboardEnabled: true,
-  controlCenterEnabled: true,
-
-  // Advanced
-  gpuAcceleration: true,
-  transparencyEffects: true,
-  developerMode: false,
-}
-
 // ── Primitive controls ────────────────────────────────────────────────────────
 
-function Toggle({ id, value, onChange }) {
+function Toggle({ id, value, onChange, disabled = false }) {
   return (
     <button
+      type="button"
       id={id}
       className={`settings-toggle ${value ? 'on' : ''}`}
       role="switch"
       aria-checked={value}
+      disabled={disabled}
       onClick={() => onChange(!value)}
     />
   )
@@ -161,7 +109,7 @@ function ShortcutKey({ keys, onClear }) {
       <div className="shortcut-keys">
         {keys.map((k, i) => <kbd key={i} className="kbd">{k}</kbd>)}
       </div>
-      <button className="shortcut-clear" onClick={onClear} aria-label="Clear shortcut">✕</button>
+      <button type="button" className="shortcut-clear" onClick={onClear} aria-label="Clear shortcut">✕</button>
     </div>
   )
 }
@@ -333,6 +281,11 @@ function HUDsTab({ s, set }) {
         <Row label="Brightness HUD"><Toggle id="tog-bhud" value={s.brightnessHUD} onChange={v => set('brightnessHUD', v)} /></Row>
         <Row label="Battery HUD" hint="On charge / disconnect"><Toggle id="tog-bathud" value={s.batteryHUD} onChange={v => set('batteryHUD', v)} /></Row>
       </Section>
+      <Section title="Widgets">
+        <Row label="System Monitor" hint="CPU & RAM usage in expanded view">
+          <Toggle id="tog-sysmon" value={s.showSystemMonitor} onChange={v => set('showSystemMonitor', v)} />
+        </Row>
+      </Section>
       <Section title="Position">
         <Row label="HUD Position">
           <Select id="sel-hudpos" value={s.hudPosition} onChange={v => set('hudPosition', v)} options={[
@@ -373,7 +326,7 @@ function ConnectorsTab({ s, set }) {
           <Toggle id="tog-browser" value={s.browserEnabled} onChange={v => set('browserEnabled', v)} />
         </Row>
         <Row label="Windows Media Player">
-          <Toggle id="tog-wmp" value={s.spotifyEnabled} onChange={v => set('spotifyEnabled', v)} />
+          <Toggle id="tog-wmp" value={s.windowsMediaEnabled} onChange={v => set('windowsMediaEnabled', v)} />
         </Row>
       </Section>
       <Section title="Dock Connectors">
@@ -393,7 +346,7 @@ function ConnectorsTab({ s, set }) {
 
 function ShortcutsTab() {
   const [shortcuts, setShortcuts] = useState({
-    sneakPeek:     ['Win', 'Alt', 'H'],
+    openSettings:  ['Win', 'Alt', 'S'],
     toggleNotch:   ['Win', 'Alt', 'E'],
     controlCenter: ['Win', 'Alt', 'C'],
     clipboard:     ['Win', 'Alt', 'V'],
@@ -405,13 +358,13 @@ function ShortcutsTab() {
         <Row label="Toggle HUD Visibility" hint="Win + Alt + E">
           {shortcuts.toggleNotch.length > 0
             ? <ShortcutKey keys={shortcuts.toggleNotch} onClear={() => clear('toggleNotch')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, toggleNotch: ['Win','Alt','E'] }))}>Restore</button>
+            : <button type="button" className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, toggleNotch: ['Win','Alt','E'] }))}>Restore</button>
           }
         </Row>
         <Row label="Open Settings" hint="Win + Alt + S">
-          {shortcuts.sneakPeek.length > 0
-            ? <ShortcutKey keys={shortcuts.sneakPeek} onClear={() => clear('sneakPeek')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, sneakPeek: ['Win','Alt','H'] }))}>Restore</button>
+          {shortcuts.openSettings.length > 0
+            ? <ShortcutKey keys={shortcuts.openSettings} onClear={() => clear('openSettings')} />
+            : <button type="button" className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, openSettings: ['Win','Alt','S'] }))}>Restore</button>
           }
         </Row>
       </Section>
@@ -419,13 +372,13 @@ function ShortcutsTab() {
         <Row label="Open Control Center">
           {shortcuts.controlCenter.length > 0
             ? <ShortcutKey keys={shortcuts.controlCenter} onClear={() => clear('controlCenter')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, controlCenter: ['Win','Alt','C'] }))}>Restore</button>
+            : <button type="button" className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, controlCenter: ['Win','Alt','C'] }))}>Restore</button>
           }
         </Row>
         <Row label="Open Clipboard">
           {shortcuts.clipboard.length > 0
             ? <ShortcutKey keys={shortcuts.clipboard} onClear={() => clear('clipboard')} />
-            : <button className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, clipboard: ['Win','Alt','V'] }))}>Restore</button>
+            : <button type="button" className="shortcut-record-btn" onClick={() => setShortcuts(s => ({ ...s, clipboard: ['Win','Alt','V'] }))}>Restore</button>
           }
         </Row>
       </Section>
@@ -433,7 +386,7 @@ function ShortcutsTab() {
   )
 }
 
-function AdvancedTab({ s, set }) {
+function AdvancedTab({ s, set, onReset }) {
   return (
     <>
       <Section title="Accent Color">
@@ -465,13 +418,13 @@ function AdvancedTab({ s, set }) {
           }} />
         </Row>
         <button
+          type="button"
           id="btn-reset-settings"
           className="settings-danger-btn"
           style={{ marginTop: 8 }}
           onClick={() => {
             if (window.confirm('Reset all settings to defaults?')) {
-              localStorage.removeItem('edge-go-settings')
-              window.location.reload()
+              onReset()
             }
           }}
         >
@@ -482,7 +435,7 @@ function AdvancedTab({ s, set }) {
   )
 }
 
-function AboutTab() {
+function AboutTab({ s, set }) {
   return (
     <>
       <div className="about-hero">
@@ -499,8 +452,12 @@ function AboutTab() {
         <Row label="Platform"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows 10 / 11 (x64)</span></Row>
       </Section>
       <Section title="Software updates">
-        <Row label="Automatically check for updates"><Toggle id="tog-autoupdate" value={true} onChange={() => {}} /></Row>
-        <Row label="Automatically download updates"><Toggle id="tog-autodown" value={true} onChange={() => {}} /></Row>
+        <Row label="Automatically check for updates">
+          <Toggle id="tog-autoupdate" value={s.autoCheckUpdates} onChange={v => set('autoCheckUpdates', v)} />
+        </Row>
+        <Row label="Automatically download updates">
+          <Toggle id="tog-autodown" value={s.autoDownloadUpdates} onChange={v => set('autoDownloadUpdates', v)} />
+        </Row>
       </Section>
       <div className="about-links">
         <a id="link-github" href="https://github.com" target="_blank" rel="noreferrer" className="about-link">
@@ -516,7 +473,7 @@ function AboutTab() {
           <strong>Unlock Pro Features</strong>
           <span>Custom themes, more widgets, priority support</span>
         </div>
-        <button id="btn-upgrade" className="upgrade-btn" onClick={() => alert('Pro version coming soon!')}>
+        <button type="button" id="btn-upgrade" className="upgrade-btn" onClick={() => alert('Pro version coming soon!')}>
           Upgrade →
         </button>
       </div>
@@ -530,62 +487,43 @@ function AboutTab() {
 export default function SettingsPanel({ open, onClose, initialTab, isStandalone, settings: propSettings, onSettingsChange }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'general')
   const [localSettings, setLocalSettings] = useState(() => {
-    if (propSettings) return propSettings
+    if (propSettings) return normalizeSettings(propSettings)
     try {
       const saved = localStorage.getItem('edge-go-settings')
-      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS
+      return saved ? normalizeSettings(JSON.parse(saved)) : normalizeSettings(DEFAULT_SETTINGS)
     } catch {
-      return DEFAULT_SETTINGS
+      return normalizeSettings(DEFAULT_SETTINGS)
     }
   })
 
   // Use effective settings (prop if provided, else local)
-  const settings = propSettings || localSettings
+  const settings = useMemo(
+    () => normalizeSettings(propSettings || localSettings),
+    [propSettings, localSettings]
+  )
 
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab)
   }, [initialTab])
 
   useEffect(() => {
+    if (!window.electronAPI?.onOpenSettingsTab) return undefined
+    return window.electronAPI.onOpenSettingsTab(tab => {
+      if (NAV.some(item => item.id === tab)) setActiveTab(tab)
+    })
+  }, [])
+
+  useEffect(() => {
     if (!propSettings) {
-      localStorage.setItem('edge-go-settings', JSON.stringify(settings))
-    }
-    if (window.electronAPI?.updateSettings) {
-      window.electronAPI.updateSettings(settings)
+      saveStoredSettings(settings)
+      if (window.electronAPI?.updateSettings) {
+        window.electronAPI.updateSettings(settings)
+      }
     }
   }, [settings, propSettings])
 
   useEffect(() => {
-    const root = document.documentElement
-    if (settings.accentColor) {
-      root.style.setProperty('--color-accent', settings.accentColor)
-      root.style.setProperty('--color-accent-glow', settings.accentColor + '59')
-    }
-    if (settings.cornerRadius !== undefined) {
-      root.style.setProperty('--notch-radius', `${settings.cornerRadius}px`)
-    }
-    if (settings.collapsedWidth !== undefined) {
-      root.style.setProperty('--notch-collapsed-width', `${settings.collapsedWidth}px`)
-    }
-    if (settings.expandedWidth !== undefined) {
-      root.style.setProperty('--notch-expanded-width', `${settings.expandedWidth}px`)
-    }
-    if (settings.blurIntensity) {
-      const blurMap = { low: '12px', medium: '24px', high: '40px' }
-      root.style.setProperty('--notch-blur', blurMap[settings.blurIntensity] || '24px')
-    }
-    if (settings.animationSpeed) {
-      const speedMap = { slow: '800ms', normal: '500ms', fast: '250ms', off: '0ms' }
-      root.style.setProperty('--notch-anim-speed', speedMap[settings.animationSpeed] || '500ms')
-    }
-    if (settings.darkMode !== undefined) {
-      root.style.setProperty('--is-dark', settings.darkMode ? '1' : '0')
-      if (settings.darkMode) {
-        root.classList.add('dark')
-      } else {
-        root.classList.remove('dark')
-      }
-    }
+    applySettingsToDocument(settings)
   }, [settings])
 
   useEffect(() => {
@@ -599,8 +537,16 @@ export default function SettingsPanel({ open, onClose, initialTab, isStandalone,
     if (onSettingsChange) {
       onSettingsChange(s => ({ ...s, [key]: value }))
     } else {
-      setLocalSettings(s => ({ ...s, [key]: value }))
+      setLocalSettings(s => normalizeSettings({ ...s, [key]: value }))
     }
+  }
+
+  const resetAll = () => {
+    const next = normalizeSettings(DEFAULT_SETTINGS)
+    saveStoredSettings(next)
+    setLocalSettings(next)
+    if (onSettingsChange) onSettingsChange(() => next)
+    window.electronAPI?.updateSettings?.(next)
   }
 
   if (!open) return null
@@ -614,8 +560,8 @@ export default function SettingsPanel({ open, onClose, initialTab, isStandalone,
     battery:    <BatteryTab s={settings} set={set} />,
     connectors: <ConnectorsTab s={settings} set={set} />,
     shortcuts:  <ShortcutsTab />,
-    advanced:   <AdvancedTab s={settings} set={set} />,
-    about:      <AboutTab />,
+    advanced:   <AdvancedTab s={settings} set={set} onReset={resetAll} />,
+    about:      <AboutTab s={settings} set={set} />,
   }
 
   return (

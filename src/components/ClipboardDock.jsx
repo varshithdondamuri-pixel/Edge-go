@@ -50,7 +50,11 @@ export default function ClipboardDock({ open, onClose }) {
   }, [])
 
   const handleCopy = useCallback((clip) => {
-    navigator.clipboard.writeText(clip.text).catch(() => {})
+    if (window.electronAPI?.writeClipboard) {
+      window.electronAPI.writeClipboard(clip.text).catch(() => {})
+    } else {
+      navigator.clipboard?.writeText(clip.text).catch(() => {})
+    }
     setCopied(clip.id)
     setTimeout(() => setCopied(null), 1500)
   }, [])

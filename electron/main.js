@@ -7,6 +7,7 @@ const {
   screen,
   nativeImage,
   globalShortcut,
+  clipboard,
 } = require('electron')
 const path = require('path')
 const os = require('os')
@@ -17,10 +18,33 @@ const isDev = !app.isPackaged
 let mainWindow
 let settingsWindow
 let tray
-let isExpanded = false
-
 // Tracks the notch's saved position so restores are correct
-const notchState = { position: 'center', width: 320 }
+const notchState = {
+  position: 'center',
+  collapsedWidth: 300,
+  expandedWidth: 620,
+  state: 'merged',
+  controlCenterOpen: false,
+}
+
+const systemControlState = {
+  dnd: false,
+  nightLight: false,
+  brightness: 72,
+  wifi: true,
+  bluetooth: true,
+  airplaneMode: false,
+}
+
+const windowSettingsState = {
+  alwaysOnTop: true,
+  showInTaskbar: false,
+  enableWindowShadow: true,
+}
+
+const NOTCH_MERGED_HEIGHT = process.platform === 'darwin' ? 24 : 16
+const NOTCH_COLLAPSED_HEIGHT = 48
+const NOTCH_EXPANDED_HEIGHT = 200
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -29,34 +53,144 @@ const notchState = { position: 'center', width: 320 }
  * escaping issues with quotes inside the script.
  */
 function runPowerShell(script) {
+  if (process.platform !== 'win32') {
+    return Promise.reject(new Error('PowerShell is only available on Windows'))
+  }
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return new Promise((resolve, reject) => {
-    exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, (err, stdout, stderr) => {
+    exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 10000,
+      windowsHide: true,
+    }, (err, stdout, stderr) => {
       if (err) reject(err)
       else resolve(stdout)
     })
   })
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function getPrimaryWorkArea() {
+  return screen.getPrimaryDisplay().workAreaSize
+}
+
+function getNotchX(screenWidth, width = notchState.collapsedWidth) {
+  switch (notchState.position) {
+    case 'left':
+      return 16
+    case 'right':
+      return Math.max(0, screenWidth - width - 16)
+    default:
+      return Math.floor(screenWidth / 2 - width / 2)
+  }
+}
+
+function getExpandedX(screenWidth) {
+  const collapsedWidth = notchState.collapsedWidth
+  const expandedWidth = notchState.expandedWidth
+  const collapsedX = getNotchX(screenWidth, collapsedWidth)
+  return Math.floor(clamp(
+    collapsedX - (expandedWidth - collapsedWidth) / 2,
+    0,
+    Math.max(0, screenWidth - expandedWidth)
+  ))
+}
+
+function applyWindowEffects(settings = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (typeof settings.alwaysOnTop === 'boolean') {
+    windowSettingsState.alwaysOnTop = settings.alwaysOnTop
+    mainWindow.setAlwaysOnTop(settings.alwaysOnTop, 'screen-saver')
+  }
+  if (typeof settings.showInTaskbar === 'boolean') {
+    windowSettingsState.showInTaskbar = settings.showInTaskbar
+    mainWindow.setSkipTaskbar(!settings.showInTaskbar)
+  }
+  if (typeof settings.enableWindowShadow === 'boolean') {
+    windowSettingsState.enableWindowShadow = settings.enableWindowShadow
+    mainWindow.setHasShadow(settings.enableWindowShadow)
+  }
+}
+
+function applyNotchBounds(animate = true) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const display = screen.getPrimaryDisplay()
+  const sw = display.workArea.width
+  const sh = display.workArea.height
+  const isMac = process.platform === 'darwin'
+  const notchY = isMac ? 0 : display.workArea.y
+
+  if (notchState.controlCenterOpen) {
+    const displayHeight = isMac ? display.bounds.height : sh
+    mainWindow.setBounds({ width: sw, height: displayHeight, x: 0, y: notchY }, animate)
+    mainWindow.setIgnoreMouseEvents(false)
+    return
+  }
+
+  let width = notchState.collapsedWidth
+  let height = NOTCH_COLLAPSED_HEIGHT
+  let x = getNotchX(sw, width)
+
+  if (notchState.state === 'expanded') {
+    width = notchState.expandedWidth
+    height = NOTCH_EXPANDED_HEIGHT
+    x = getExpandedX(sw)
+  } else if (notchState.state === 'merged') {
+    width = 140
+    height = NOTCH_MERGED_HEIGHT
+    x = getNotchX(sw, width)
+  } else {
+    // collapsed
+    width = notchState.collapsedWidth
+    height = NOTCH_COLLAPSED_HEIGHT
+    x = getNotchX(sw, width)
+  }
+
+  mainWindow.setBounds({
+    width,
+    height,
+    x,
+    y: notchY,
+  }, animate)
+}
+
+function sanitizeSettings(settings = {}) {
+  return {
+    ...settings,
+    notchPosition: ['left', 'center', 'right'].includes(settings.notchPosition)
+      ? settings.notchPosition
+      : notchState.position,
+    collapsedWidth: clamp(Number(settings.collapsedWidth) || notchState.collapsedWidth, 240, 440),
+    expandedWidth: clamp(Number(settings.expandedWidth) || notchState.expandedWidth, 500, 800),
+  }
+}
+
 // ─── Window creation ────────────────────────────────────────────────────────
 
 function createWindow() {
-  const { width } = screen.getPrimaryDisplay().workAreaSize
+  const display = screen.getPrimaryDisplay()
+  const width = display.workArea.width
+  const isMac = process.platform === 'darwin'
+  const notchY = isMac ? 0 : display.workArea.y
 
   mainWindow = new BrowserWindow({
-    width: 320,
-    height: 44,
-    x: Math.floor(width / 2 - 160),
-    y: 0,
+    width: 140,
+    height: NOTCH_MERGED_HEIGHT,
+    x: getNotchX(width, 140),
+    y: notchY,
     frame: false,
     transparent: true,
-    backgroundColor: '#000000',
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
     movable: true,
     hasShadow: false,
-    show: false,
+    show: true,
+    enableLargerThanScreen: isMac,
+    titleBarStyle: isMac ? 'hidden' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -65,6 +199,10 @@ function createWindow() {
     },
   })
 
+  if (isMac) {
+    mainWindow.setWindowButtonVisibility(false)
+  }
+
   // Load app
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
@@ -72,19 +210,22 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
-  // Show window only when content is ready to avoid blank flash
+  // Ensure shown and set always on top level
+  mainWindow.show()
+  mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
+
+  if (isDev) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  }
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
-    // Re-assert always-on-top after show
-    mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
+    mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
   })
 
-  // Keep always on top on Windows
-  mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
-
   mainWindow.on('blur', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setAlwaysOnTop(true, 'pop-up-menu')
+    if (mainWindow && !mainWindow.isDestroyed() && windowSettingsState.alwaysOnTop) {
+      mainWindow.setAlwaysOnTop(true, 'screen-saver')
     }
   })
 
@@ -111,7 +252,6 @@ function createSettingsWindow(tab = 'general') {
     title: 'Edge Go Settings',
     frame: false,
     transparent: true,
-    backgroundColor: '#0c0c0e',
     hasShadow: true,
     center: true,
     show: false,
@@ -191,61 +331,184 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
-  return new Promise((resolve) => {
-    exec(
-      'wmic path win32_battery get EstimatedChargeRemaining,BatteryStatus /format:value',
-      (err, stdout) => {
-        if (err || !stdout.trim()) {
-          resolve({ level: 100, charging: false, available: false })
-          return
-        }
-        const levelMatch = stdout.match(/EstimatedChargeRemaining=(\d+)/)
-        const statusMatch = stdout.match(/BatteryStatus=(\d+)/)
-        if (!levelMatch) {
-          resolve({ level: 100, charging: false, available: false })
-          return
-        }
-        resolve({
-          level: parseInt(levelMatch[1]),
-          // BatteryStatus=2 means "Charging", 1 means "On Battery"
-          charging: statusMatch ? parseInt(statusMatch[1]) === 2 : false,
-          available: true,
-        })
-      }
-    )
-  })
+  if (process.platform !== 'win32') {
+    return { level: 100, charging: false, available: false }
+  }
+
+  try {
+    const out = await runPowerShell(`
+$battery = Get-CimInstance Win32_Battery | Select-Object -First 1
+if ($battery) {
+  [PSCustomObject]@{
+    level = [int]$battery.EstimatedChargeRemaining
+    charging = ($battery.BatteryStatus -eq 2 -or $battery.BatteryStatus -eq 6 -or $battery.BatteryStatus -eq 7 -or $battery.BatteryStatus -eq 8 -or $battery.BatteryStatus -eq 9)
+    available = $true
+  } | ConvertTo-Json -Compress
+} else {
+  [PSCustomObject]@{ level = 100; charging = $false; available = $false } | ConvertTo-Json -Compress
+}
+`)
+    return JSON.parse(out.trim())
+  } catch (e) {
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error('get-battery error:', e.message)
+    }
+    return { level: 100, charging: false, available: false }
+  }
 })
 
 // ─── IPC: System Info ─────────────────────────────────────────────────────
 
 ipcMain.handle('get-system-info', () => ({
-  platform: 'win32',
+  platform: process.platform,
   hostname: os.hostname(),
   arch: os.arch(),
   version: app.getVersion(),
 }))
 
-ipcMain.handle('get-system-state', async () => {
-  const state = { dnd: false, nightLight: false, brightness: 72 }
+// ─── IPC: System Resource Usage ───────────────────────────────────────────────
+
+ipcMain.handle('get-system-usage', async () => {
+  try {
+    const psScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+$cpu = (Get-WmiObject -Class Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+$os = Get-WmiObject -Class Win32_OperatingSystem
+$ramTotal = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
+$ramFree  = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
+$ramUsed  = [math]::Round($ramTotal - $ramFree, 2)
+[PSCustomObject]@{ cpu = [int]$cpu; ramUsed = $ramUsed; ramTotal = $ramTotal } | ConvertTo-Json -Compress
+`
+    const out = await runPowerShell(psScript)
+    if (!out || !out.trim()) return { cpu: 0, ramUsed: 0, ramTotal: 1 }
+    const data = JSON.parse(out.trim())
+    return {
+      cpu: Math.min(100, Math.max(0, Number(data.cpu) || 0)),
+      ramUsed: Number(data.ramUsed) || 0,
+      ramTotal: Number(data.ramTotal) || 1,
+    }
+  } catch (e) {
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error('get-system-usage error:', e.message)
+    }
+    return { cpu: 0, ramUsed: 0, ramTotal: 1 }
+  }
+})
+
+async function getWindowsSystemState() {
+  if (process.platform !== 'win32') return { ...systemControlState }
 
   try {
-    // Get brightness
-    const brightnessOut = await runPowerShell(
-      `(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness`
-    ).catch(() => '')
-    if (brightnessOut) state.brightness = parseInt(brightnessOut.trim()) || 72
-
-    // Get Focus Assist (DND) — 0x0 means notifications disabled = DND on
-    const dndOut = await runPowerShell(
-      `(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -ErrorAction SilentlyContinue).NOC_GLOBAL_SETTING_TOASTS_ENABLED`
-    ).catch(() => '')
-    if (dndOut && dndOut.trim() === '0') state.dnd = true
+    const out = await runPowerShell(`
+$ErrorActionPreference = 'SilentlyContinue'
+$brightness = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness | Select-Object -First 1).CurrentBrightness
+$toast = (Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -ErrorAction SilentlyContinue).NOC_GLOBAL_SETTING_TOASTS_ENABLED
+$wifiAdapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
+  $_.Name -match 'Wi-Fi|Wireless|WLAN' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|WLAN'
+} | Select-Object -First 1
+$bluetoothDevice = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object {
+  $_.InstanceId -notmatch '^BTHENUM' -and $_.FriendlyName -match 'Bluetooth'
+} | Select-Object -First 1
+[PSCustomObject]@{
+  brightness = if ($brightness -ne $null) { [int]$brightness } else { $null }
+  dnd = ($toast -eq 0)
+  wifi = if ($wifiAdapter) { $wifiAdapter.Status -ne 'Disabled' } else { $null }
+  bluetooth = if ($bluetoothDevice) { $bluetoothDevice.Status -eq 'OK' } else { $null }
+} | ConvertTo-Json -Compress
+`)
+    const parsed = JSON.parse(out.trim())
+    return {
+      ...systemControlState,
+      brightness: parsed.brightness ?? systemControlState.brightness,
+      dnd: typeof parsed.dnd === 'boolean' ? parsed.dnd : systemControlState.dnd,
+      wifi: typeof parsed.wifi === 'boolean' ? parsed.wifi : systemControlState.wifi,
+      bluetooth: typeof parsed.bluetooth === 'boolean' ? parsed.bluetooth : systemControlState.bluetooth,
+    }
   } catch (e) {
-    console.error('get-system-state error:', e.message)
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error('get-system-state error:', e.message)
+    }
+    return { ...systemControlState }
+  }
+}
+
+async function setSystemControl(control, value) {
+  if (process.platform !== 'win32') {
+    systemControlState[control] = value
+    return { ok: true, simulated: true, state: { ...systemControlState } }
   }
 
-  return state
-})
+  const boolValue = value ? '$true' : '$false'
+  const numberValue = clamp(Number(value) || 0, 0, 100)
+  let script = ''
+
+  if (control === 'brightness') {
+    script = `(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(1,${numberValue}) | Out-Null`
+  } else if (control === 'dnd') {
+    const val = value ? 0 : 1
+    script = `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${val} -Force`
+  } else if (control === 'nightLight') {
+    script = `
+$path = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultNetworkCloudStore\\Data\\Microsoft.Settings.Displays.BlueLightReduction.Setting'
+$data = (Get-ItemProperty -Path $path -ErrorAction Stop).Data
+if ($data -and $data.Length -gt 24) {
+  $data[24] = if (${boolValue}) { 0x15 } else { 0x10 }
+  Set-ItemProperty -Path $path -Name 'Data' -Value $data
+}
+`
+  } else if (control === 'wifi') {
+    script = `
+$adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
+  $_.Name -match 'Wi-Fi|Wireless|WLAN' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|WLAN'
+} | Select-Object -First 1
+if (-not $adapter) { throw 'No Wi-Fi adapter found' }
+if (${boolValue}) {
+  Enable-NetAdapter -Name $adapter.Name -Confirm:$false
+} else {
+  Disable-NetAdapter -Name $adapter.Name -Confirm:$false
+}
+`
+  } else if (control === 'bluetooth') {
+    script = `
+$device = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object {
+  $_.InstanceId -notmatch '^BTHENUM' -and $_.FriendlyName -match 'Bluetooth'
+} | Select-Object -First 1
+if (-not $device) { throw 'No Bluetooth adapter found' }
+if (${boolValue}) {
+  Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
+} else {
+  Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
+}
+`
+  } else if (control === 'airplaneMode') {
+    if (value) {
+      await setSystemControl('wifi', false).catch(() => null)
+      await setSystemControl('bluetooth', false).catch(() => null)
+    } else {
+      await setSystemControl('wifi', true).catch(() => null)
+      await setSystemControl('bluetooth', true).catch(() => null)
+    }
+    systemControlState.airplaneMode = !!value
+    return { ok: true, state: { ...systemControlState } }
+  } else {
+    return { ok: false, error: `Unknown system control: ${control}` }
+  }
+
+  try {
+    await runPowerShell(script)
+    systemControlState[control] = control === 'brightness' ? numberValue : !!value
+    return { ok: true, state: { ...systemControlState } }
+  } catch (e) {
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error(`set-system-control ${control} error:`, e.message)
+    }
+    return { ok: false, error: e.message, state: { ...systemControlState } }
+  }
+}
+
+ipcMain.handle('get-system-state', async () => getWindowsSystemState())
+
+ipcMain.handle('set-system-control', async (_, control, value) => setSystemControl(control, value))
 
 // ─── IPC: Media Info (Windows SMTC) ─────────────────────────────────────────
 
@@ -264,31 +527,62 @@ try {
   }
   $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
   $sessions = $smgr.GetSessions()
+  $current = $smgr.GetCurrentSession()
+  $currentId = if ($current) { [string]$current.SourceAppUserModelId } else { '' }
   $results = [System.Collections.Generic.List[hashtable]]::new()
   foreach ($s in $sessions) {
     try {
       $props = Await($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.MediaProperties])
       $info  = $s.GetPlaybackInfo()
       $tl    = $s.GetTimelineProperties()
-      $src   = $s.SourceAppUserModelId
-      $label = switch -Wildcard ($src.ToLower()) {
-        '*spotify*'  { 'Spotify' }
-        '*chrome*'   { 'Chrome' }
-        '*msedge*'   { 'Edge' }
-        '*firefox*'  { 'Firefox' }
-        '*vlc*'      { 'VLC' }
-        '*groove*'   { 'Groove Music' }
-        '*music*'    { 'Windows Media' }
-        default      { 'Media' }
+      $src   = [string]$s.SourceAppUserModelId
+      $srcLower = $src.ToLowerInvariant()
+      $label = switch -Wildcard ($srcLower) {
+        '*spotify*'       { 'Spotify' }
+        '*chrome*'        { 'Chrome' }
+        '*msedge*'        { 'Edge' }
+        '*firefox*'       { 'Firefox' }
+        '*vlc*'           { 'VLC' }
+        '*zune*'          { 'Groove Music' }
+        '*groove*'        { 'Groove Music' }
+        '*wmplayer*'      { 'Windows Media Player' }
+        '*media.player*'  { 'Windows Media' }
+        '*music*'         { 'Windows Media' }
+        default           { if ($src) { $src } else { 'Media' } }
       }
+
+      $albumArtStr = $null
+      if ($props.Thumbnail) {
+        try {
+          $stream = Await($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+          if ($stream) {
+            $reader = [Windows.Storage.Streams.DataReader]::new($stream.GetInputStreamAt(0))
+            $bytes = New-Object byte[] $stream.Size
+            $loadTask = $reader.LoadAsync($stream.Size)
+            Await $loadTask ([uint32]) | Out-Null
+            $reader.ReadBytes($bytes)
+            $base64 = [Convert]::ToBase64String($bytes)
+            $contentType = $stream.ContentType
+            if (-not $contentType) { $contentType = "image/jpeg" }
+            $albumArtStr = "data:" + $contentType + ";base64," + $base64
+            $reader.Dispose()
+            $stream.Dispose()
+          }
+        } catch {}
+      }
+
       $results.Add(@{
         title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
         artist    = if ($props.Artist)      { $props.Artist }      else { '' }
         album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
+        albumArt  = $albumArtStr
         isPlaying = ($info.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing)
         position  = if ($tl) { try { [math]::Round($tl.Position.TotalSeconds, 1) } catch { 0 } } else { 0 }
         duration  = if ($tl) { try { [math]::Round($tl.EndTime.TotalSeconds, 1) } catch { 0 } } else { 0 }
         source    = $label
+        sourceAppId = $src
+        isCurrent = ($src -eq $currentId)
+        playbackStatus = if ($info) { [string]$info.PlaybackStatus } else { '' }
       })
     } catch { }
   }
@@ -306,127 +600,279 @@ try {
       title: s.title || 'Unknown Title',
       artist: s.artist || '',
       album: s.album || '',
+      albumArt: s.albumArt || null,
       duration: Number(s.duration) || 0,
       position: Number(s.position) || 0,
       isPlaying: !!s.isPlaying,
       volume: 50,
       source: s.source || 'Media',
-      albumArt: null,
+      sourceAppId: s.sourceAppId || '',
+      isCurrent: !!s.isCurrent,
+      playbackStatus: s.playbackStatus || '',
     }))
   } catch (e) {
-    console.error('get-media-info error:', e.message)
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error('get-media-info error:', e.message)
+    }
     return []
   }
 })
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
+function setWindowsVolume(level) {
+  const scalar = clamp(Number(level) || 0, 0, 100) / 100
+  const psScript = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace EdgeGoAudio {
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+  class MMDeviceEnumeratorComObject {}
+
+  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator {
+    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+    int GetDevice(string pwstrId, out IMMDevice ppDevice);
+    int RegisterEndpointNotificationCallback(IntPtr pClient);
+    int UnregisterEndpointNotificationCallback(IntPtr pClient);
+  }
+
+  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
+    int GetId(out IntPtr ppstrId);
+    int GetState(out int pdwState);
+  }
+
+  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out int pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute(bool bMute, Guid pguidEventContext);
+    int GetMute(out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(Guid pguidEventContext);
+    int VolumeStepDown(Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+  }
+
+  public static class Volume {
+    public static void Set(float level) {
+      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+      IMMDevice device;
+      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      IAudioEndpointVolume endpoint;
+      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+      var eventContext = Guid.Empty;
+      Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(level, eventContext));
+      Marshal.ThrowExceptionForHR(endpoint.SetMute(level <= 0.001f, eventContext));
+    }
+  }
+}
+'@
+[EdgeGoAudio.Volume]::Set(${scalar})
+`
+  return runPowerShell(psScript)
+}
+
 ipcMain.on('media-command', (_, command, value, source) => {
+  if (command === 'volume') {
+    setWindowsVolume(value).catch(e => {
+      if (e.message !== 'PowerShell is only available on Windows') {
+        console.error('volume-command error:', e.message)
+      }
+    })
+    return
+  }
+
   let method = ''
   if (command === 'playpause') method = 'TryTogglePlayPauseAsync'
   else if (command === 'next')  method = 'TrySkipNextAsync'
   else if (command === 'prev')  method = 'TrySkipPreviousAsync'
+  else if (command === 'seek')  method = 'TryChangePlaybackPositionAsync'
 
   if (!method) return
 
   const safeSource = (source || '').replace(/'/g, "''")
+  const seekTicks = command === 'seek'
+    ? Math.round(clamp(Number(value) || 0, 0, 86400) * 10000000)
+    : 0
+  const action = command === 'seek'
+    ? `[void](AwaitResult ($session.TryChangePlaybackPositionAsync(${seekTicks})) ([bool]))`
+    : `[void](AwaitResult ($session.${method}()) ([bool]))`
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
-function Await($WinRtTask, $ResultType) {
+function AwaitResult($WinRtTask, $ResultType) {
   $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
   $netTask = $asTask.Invoke($null, @($WinRtTask))
   $netTask.Wait(-1) | Out-Null
   $netTask.Result
 }
-function AwaitAction($WinRtTask) {
-  $asTask = [System.WindowsRuntimeSystemExtensions].GetMethod('AsTask', [Type[]]@([Windows.Foundation.IAsyncAction]))
-  $netTask = $asTask.Invoke($null, @($WinRtTask))
-  $netTask.Wait(-1) | Out-Null
+function Get-FriendlySource($id) {
+  switch -Wildcard ($id.ToLowerInvariant()) {
+    '*spotify*'       { return 'Spotify' }
+    '*chrome*'        { return 'Chrome' }
+    '*msedge*'        { return 'Edge' }
+    '*firefox*'       { return 'Firefox' }
+    '*vlc*'           { return 'VLC' }
+    '*zune*'          { return 'Groove Music' }
+    '*groove*'        { return 'Groove Music' }
+    '*wmplayer*'      { return 'Windows Media Player' }
+    '*media.player*'  { return 'Windows Media' }
+    '*music*'         { return 'Windows Media' }
+    default           { return $id }
+  }
 }
-$smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+function Invoke-EdgeGoMediaCommand($session) {
+  if (-not $session) { return $false }
+  try {
+    ${action}
+    return $true
+  } catch {
+    return $false
+  }
+}
+$smgr = AwaitResult([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 $sessions = $smgr.GetSessions()
 $target = '${safeSource}'.ToLower()
 $matched = $false
 foreach ($s in $sessions) {
-  $id = $s.SourceAppUserModelId.ToLower()
-  if ($target -and $id -like "*$target*") {
-    AwaitAction($s.${method}())
-    $matched = $true
-    break
+  $id = ([string]$s.SourceAppUserModelId).ToLowerInvariant()
+  $label = (Get-FriendlySource $id).ToLowerInvariant()
+  if ($target -and ($id.Contains($target) -or $label.Contains($target))) {
+    $matched = Invoke-EdgeGoMediaCommand $s
+    if ($matched) {
+      break
+    }
   }
 }
 if (-not $matched) {
   $cur = $smgr.GetCurrentSession()
-  if ($cur) { AwaitAction($cur.${method}()) }
+  if ($cur) {
+    $matched = Invoke-EdgeGoMediaCommand $cur
+  }
+}
+if (-not $matched) {
+  foreach ($s in $sessions) {
+    if (Invoke-EdgeGoMediaCommand $s) {
+    $matched = $true
+    break
+    }
+  }
 }
 `
-  runPowerShell(psScript).catch(e => console.error('media-command error:', e.message))
+  runPowerShell(psScript).catch(e => {
+    if (e.message !== 'PowerShell is only available on Windows') {
+      console.error('media-command error:', e.message)
+    }
+  })
 })
 
 // ─── IPC: Settings sync ──────────────────────────────────────────────────────
 
-ipcMain.on('update-settings', (_, settings) => {
+ipcMain.on('update-settings', (event, settings) => {
+  const next = sanitizeSettings(settings)
+  notchState.position = next.notchPosition
+  notchState.collapsedWidth = next.collapsedWidth
+  notchState.expandedWidth = next.expandedWidth
+  applyWindowEffects(next)
+  applyNotchBounds(true)
+
   BrowserWindow.getAllWindows().forEach(win => {
-    if (!win.isDestroyed()) win.webContents.send('settings-updated', settings)
+    if (!win.isDestroyed() && win.webContents !== event.sender) {
+      win.webContents.send('settings-updated', next)
+    }
   })
 })
 
 ipcMain.handle('get-settings', () => null)
 
+// ─── IPC: Clipboard ─────────────────────────────────────────────────────────
+
+ipcMain.handle('read-clipboard', () => clipboard.readText())
+
+ipcMain.handle('write-clipboard', (_, text) => {
+  clipboard.writeText(String(text || ''))
+  return true
+})
+
 // ─── IPC: Window management ──────────────────────────────────────────────────
 
-function getNotchX(sw) {
-  const w = notchState.width || 320
-  switch (notchState.position) {
-    case 'left':  return 16
-    case 'right': return sw - w - 16
-    default:      return Math.floor(sw / 2 - w / 2)
-  }
-}
-
-ipcMain.on('expand-window', (_, expanded) => {
+ipcMain.on('expand-window', (_, stateName, opts) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
-  const x = getNotchX(sw)
-  if (expanded) {
-    mainWindow.setBounds({ width: 680, height: 200, x: Math.max(0, Math.min(x - 180, sw - 680)), y: 0 }, true)
-  } else {
-    mainWindow.setBounds({ width: notchState.width || 320, height: 44, x, y: 0 }, true)
+  if (opts?.collapsedWidth) {
+    notchState.collapsedWidth = clamp(Number(opts.collapsedWidth) || notchState.collapsedWidth, 240, 440)
   }
+  if (opts?.expandedWidth) {
+    notchState.expandedWidth = clamp(Number(opts.expandedWidth) || notchState.expandedWidth, 500, 800)
+  }
+  if (stateName === 'expanded') {
+    notchState.state = 'expanded'
+  } else if (stateName === 'collapsed') {
+    notchState.state = 'collapsed'
+  } else {
+    notchState.state = 'merged'
+  }
+  applyNotchBounds(true)
 })
 
 ipcMain.on('set-window-size', (_, { width, height }) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
-  mainWindow.setBounds({ width, height, x: Math.floor(sw / 2 - width / 2), y: 0 }, true)
+  const display = screen.getPrimaryDisplay()
+  const sw = display.workArea.width
+  const isMac = process.platform === 'darwin'
+  const notchY = isMac ? 0 : display.workArea.y
+  mainWindow.setBounds({ width, height, x: Math.floor(sw / 2 - width / 2), y: notchY }, true)
 })
 
 ipcMain.on('set-notch-position', (_, position, notchWidth) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  notchState.position = position || 'center'
-  notchState.width = notchWidth || 320
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize
-  const x = getNotchX(sw)
-  const currentBounds = mainWindow.getBounds()
-  mainWindow.setBounds({ ...currentBounds, x, width: notchState.width }, true)
+  notchState.position = ['left', 'center', 'right'].includes(position) ? position : 'center'
+  notchState.collapsedWidth = clamp(Number(notchWidth) || notchState.collapsedWidth, 240, 440)
+  applyNotchBounds(true)
 })
 
 ipcMain.on('set-control-center', (_, isOpen) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
-  if (isOpen) {
-    mainWindow.setBounds({ width: sw, height: sh, x: 0, y: 0 }, true)
-    mainWindow.setIgnoreMouseEvents(false)
-  } else {
-    const x = getNotchX(sw)
-    mainWindow.setBounds({ width: notchState.width || 320, height: 44, x, y: 0 }, true)
-  }
+  notchState.controlCenterOpen = !!isOpen
+  // When CC opens, force expanded. When it closes,
+  // leave state='expanded' — the React notch-bar will
+  // collapse on its own mouse-leave after the overlay
+  // dismisses (350 ms delay). This prevents a race
+  // where the window snaps to collapsed while CC is
+  // still animating out.
+  if (isOpen) notchState.state = 'expanded'
+  applyNotchBounds(true)
 })
 
 ipcMain.on('set-always-on-top', (_, value) => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(value, 'pop-up-menu')
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(value, 'screen-saver')
+})
+
+ipcMain.on('set-show-in-taskbar', (_, value) => {
+  windowSettingsState.showInTaskbar = !!value
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setSkipTaskbar(!value)
+})
+
+ipcMain.on('set-window-effects', (_, effects) => {
+  applyWindowEffects(effects)
 })
 
 ipcMain.on('set-launch-at-startup', (_, value) => {
@@ -444,38 +890,27 @@ ipcMain.on('close-settings', () => {
 // ─── IPC: System controls (Windows only) ────────────────────────────────────
 
 ipcMain.on('set-brightness', (_, level) => {
-  runPowerShell(
-    `(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,${Math.max(0, Math.min(100, level))})`
-  ).catch(e => console.error('set-brightness error:', e.message))
+  setSystemControl('brightness', level)
 })
 
 ipcMain.on('set-dnd', (_, enabled) => {
-  // Toggle Windows Focus Assist via registry
-  // 0 = DND on (notifications blocked), 1 = DND off
-  const val = enabled ? 0 : 1
-  runPowerShell(
-    `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${val} -Force`
-  ).catch(e => console.error('set-dnd error:', e.message))
+  setSystemControl('dnd', enabled)
 })
 
 ipcMain.on('set-nightlight', (_, enabled) => {
-  // Toggle Windows Night Light via registry
-  const psScript = `
-$path = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultNetworkCloudStore\\Data\\Microsoft.Settings.Displays.BlueLightReduction.Setting'
-try {
-  $data = (Get-ItemProperty -Path $path -ErrorAction Stop).Data
-  if ($data -and $data.Length -gt 24) {
-    $data[24] = if (${enabled ? '$true' : '$false'}) { 0x15 } else { 0x10 }
-    Set-ItemProperty -Path $path -Name 'Data' -Value $data
-  }
-} catch {}
-`
-  runPowerShell(psScript).catch(e => console.error('set-nightlight error:', e.message))
+  setSystemControl('nightLight', enabled)
 })
 
 ipcMain.on('take-screenshot', () => {
   // Opens Windows Snipping Tool overlay
-  exec('start ms-screenclip:')
+  if (process.platform === 'win32') {
+    exec('start ms-screenclip:')
+  }
+})
+
+ipcMain.on('open-devtools', (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender)
+  if (owner && !owner.isDestroyed()) owner.webContents.openDevTools({ mode: 'detach' })
 })
 
 // ─── App lifecycle ─────────────────────────────────────────────────────────
@@ -500,9 +935,27 @@ app.whenReady().then(() => {
   globalShortcut.register('Super+Alt+S', () => {
     createSettingsWindow()
   })
+
+  globalShortcut.register('Super+Alt+C', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show()
+      mainWindow.webContents.send('open-control-center')
+    }
+  })
+
+  globalShortcut.register('Super+Alt+V', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show()
+      mainWindow.webContents.send('open-clipboard')
+    }
+  })
 })
 
 // Keep app alive in tray even when all windows are closed
 app.on('window-all-closed', () => {
   // Do NOT quit — app lives in the system tray
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })
