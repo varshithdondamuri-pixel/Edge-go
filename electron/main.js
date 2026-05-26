@@ -18,6 +18,9 @@ const isDev = !app.isPackaged
 let mainWindow
 let settingsWindow
 let tray
+let winMediaProcess = null
+let lastWindowsMediaData = []
+let boundsTimeout = null
 // Tracks the notch's saved position so restores are correct
 const notchState = {
   position: 'center',
@@ -44,9 +47,38 @@ const windowSettingsState = {
 
 const NOTCH_MERGED_HEIGHT = process.platform === 'darwin' ? 24 : 16
 const NOTCH_COLLAPSED_HEIGHT = 48
-const NOTCH_EXPANDED_HEIGHT = 200
+const NOTCH_EXPANDED_HEIGHT = 240
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+let lastCpuTimes = { idle: 0, total: 1 }
+try {
+  lastCpuTimes = getCpuTimes()
+} catch {}
+
+function getCpuTimes() {
+  const cpus = os.cpus()
+  if (!cpus || cpus.length === 0) return { idle: 0, total: 1 }
+  let user = 0, nice = 0, sys = 0, idle = 0, irq = 0
+  for (const cpu of cpus) {
+    user += cpu.times.user
+    nice += cpu.times.nice
+    sys += cpu.times.sys
+    idle += cpu.times.idle
+    irq += cpu.times.irq
+  }
+  const total = user + nice + sys + idle + irq
+  return { idle, total }
+}
+
+function getCpuUsage() {
+  const current = getCpuTimes()
+  const idleDiff = current.idle - lastCpuTimes.idle
+  const totalDiff = current.total - lastCpuTimes.total
+  lastCpuTimes = current
+  if (totalDiff === 0) return 0
+  return Math.min(100, Math.max(0, Math.round((1 - idleDiff / totalDiff) * 100)))
+}
 
 /**
  * Run a PowerShell command safely using -EncodedCommand to avoid
@@ -123,9 +155,14 @@ function applyNotchBounds(animate = true) {
   const isMac = process.platform === 'darwin'
   const notchY = isMac ? 0 : display.workArea.y
 
+  if (boundsTimeout) {
+    clearTimeout(boundsTimeout)
+    boundsTimeout = null
+  }
+
   if (notchState.controlCenterOpen) {
     const displayHeight = isMac ? display.bounds.height : sh
-    mainWindow.setBounds({ width: sw, height: displayHeight, x: 0, y: notchY }, animate)
+    mainWindow.setBounds({ width: sw, height: displayHeight, x: 0, y: notchY }, isMac && animate)
     mainWindow.setIgnoreMouseEvents(false)
     return
   }
@@ -149,12 +186,22 @@ function applyNotchBounds(animate = true) {
     x = getNotchX(sw, width)
   }
 
-  mainWindow.setBounds({
-    width,
-    height,
-    x,
-    y: notchY,
-  }, animate)
+  if (isMac) {
+    mainWindow.setBounds({ width, height, x, y: notchY }, animate)
+  } else {
+    const currentBounds = mainWindow.getBounds()
+    const isExpanding = (width > currentBounds.width || height > currentBounds.height)
+
+    if (isExpanding) {
+      mainWindow.setBounds({ width, height, x, y: notchY }, false)
+    } else {
+      boundsTimeout = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setBounds({ width, height, x, y: notchY }, false)
+        }
+      }, 350)
+    }
+  }
 }
 
 function sanitizeSettings(settings = {}) {
@@ -183,12 +230,14 @@ function createWindow() {
     y: notchY,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
+    thickFrame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
     movable: true,
     hasShadow: false,
-    show: true,
+    show: false,
     enableLargerThanScreen: isMac,
     titleBarStyle: isMac ? 'hidden' : undefined,
     webPreferences: {
@@ -209,10 +258,6 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
-
-  // Ensure shown and set always on top level
-  mainWindow.show()
-  mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
 
   if (isDev) {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
@@ -252,6 +297,7 @@ function createSettingsWindow(tab = 'general') {
     title: 'Edge Go Settings',
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     hasShadow: true,
     center: true,
     show: false,
@@ -331,6 +377,27 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
+  if (process.platform === 'darwin') {
+    return new Promise((resolve) => {
+      exec('pmset -g batt', (err, stdout) => {
+        if (err || !stdout) {
+          resolve({ level: 100, charging: false, available: false })
+          return
+        }
+        const lines = stdout.split('\n')
+        const line = lines.find(l => l.includes('InternalBattery'))
+        if (!line) {
+          resolve({ level: 100, charging: false, available: false })
+          return
+        }
+        const matchesPct = line.match(/(\d+)%/)
+        const level = matchesPct ? parseInt(matchesPct[1]) : 100
+        const charging = line.includes('charging') || stdout.includes('AC Power')
+        resolve({ level, charging, available: true })
+      })
+    })
+  }
+
   if (process.platform !== 'win32') {
     return { level: 100, charging: false, available: false }
   }
@@ -368,29 +435,14 @@ ipcMain.handle('get-system-info', () => ({
 
 // ─── IPC: System Resource Usage ───────────────────────────────────────────────
 
-ipcMain.handle('get-system-usage', async () => {
+ipcMain.handle('get-system-usage', () => {
   try {
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$cpu = (Get-WmiObject -Class Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-$os = Get-WmiObject -Class Win32_OperatingSystem
-$ramTotal = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
-$ramFree  = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
-$ramUsed  = [math]::Round($ramTotal - $ramFree, 2)
-[PSCustomObject]@{ cpu = [int]$cpu; ramUsed = $ramUsed; ramTotal = $ramTotal } | ConvertTo-Json -Compress
-`
-    const out = await runPowerShell(psScript)
-    if (!out || !out.trim()) return { cpu: 0, ramUsed: 0, ramTotal: 1 }
-    const data = JSON.parse(out.trim())
-    return {
-      cpu: Math.min(100, Math.max(0, Number(data.cpu) || 0)),
-      ramUsed: Number(data.ramUsed) || 0,
-      ramTotal: Number(data.ramTotal) || 1,
-    }
-  } catch (e) {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error('get-system-usage error:', e.message)
-    }
+    const ramTotal = os.totalmem() / (1024 * 1024 * 1024)
+    const ramFree = os.freemem() / (1024 * 1024 * 1024)
+    const ramUsed = ramTotal - ramFree
+    const cpu = getCpuUsage()
+    return { cpu, ramUsed, ramTotal }
+  } catch {
     return { cpu: 0, ramUsed: 0, ramTotal: 1 }
   }
 })
@@ -512,7 +564,107 @@ ipcMain.handle('set-system-control', async (_, control, value) => setSystemContr
 
 // ─── IPC: Media Info (Windows SMTC) ─────────────────────────────────────────
 
+function parseAppleScriptOutput(output) {
+  const parts = output.split('|||')
+  if (parts.length === 8) {
+    return {
+      title: parts[0] || 'Unknown Title',
+      artist: parts[1] || '',
+      album: parts[2] || '',
+      duration: parseFloat(parts[3]) || 0,
+      position: parseFloat(parts[4]) || 0,
+      isPlaying: parts[5].toLowerCase().includes('playing'),
+      volume: parseInt(parts[6]) || 50,
+      source: parts[7] || 'Media',
+      sourceAppId: parts[7] || '',
+      isCurrent: parts[5].toLowerCase().includes('playing'),
+      playbackStatus: parts[5] || '',
+      albumArt: null,
+    }
+  }
+  return null
+}
+
+function getMacSpotifyInfo() {
+  return new Promise((resolve) => {
+    const script = `
+      tell application "Spotify"
+        try
+          set t_state to player state as string
+          set t_name to name of current track
+          set t_artist to artist of current track
+          set t_album to album of current track
+          set t_duration to (duration of current track) / 1000
+          set t_position to player position
+          set t_volume to sound volume
+          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
+        on error
+          return ""
+        end try
+      end tell
+    `
+    exec(`osascript -e '${script}'`, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        resolve(null)
+      } else {
+        resolve(parseAppleScriptOutput(stdout.trim()))
+      }
+    })
+  })
+}
+
+function getMacMusicInfo() {
+  return new Promise((resolve) => {
+    const script = `
+      tell application "Music"
+        try
+          set t_state to player state as string
+          set t_name to name of current track
+          set t_artist to artist of current track
+          set t_album to album of current track
+          set t_duration to duration of current track
+          set t_position to player position
+          set t_volume to sound volume
+          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
+        on error
+          return ""
+        end try
+      end tell
+    `
+    exec(`osascript -e '${script}'`, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        resolve(null)
+      } else {
+        resolve(parseAppleScriptOutput(stdout.trim()))
+      }
+    })
+  })
+}
+
 ipcMain.handle('get-media-info', async () => {
+  if (process.platform === 'darwin') {
+    try {
+      const results = await Promise.all([
+        getMacSpotifyInfo(),
+        getMacMusicInfo()
+      ])
+      return results.filter(Boolean)
+    } catch (e) {
+      console.error('macOS get-media-info error:', e.message)
+      return []
+    }
+  }
+
+  if (process.platform === 'win32') {
+    return lastWindowsMediaData
+  }
+
+  return []
+})
+
+function startWindowsMediaDaemon() {
+  if (process.platform !== 'win32') return
+
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -526,97 +678,132 @@ try {
     $netTask.Result
   }
   $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
-  $sessions = $smgr.GetSessions()
-  $current = $smgr.GetCurrentSession()
-  $currentId = if ($current) { [string]$current.SourceAppUserModelId } else { '' }
-  $results = [System.Collections.Generic.List[hashtable]]::new()
-  foreach ($s in $sessions) {
+  while ($true) {
     try {
-      $props = Await($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.MediaProperties])
-      $info  = $s.GetPlaybackInfo()
-      $tl    = $s.GetTimelineProperties()
-      $src   = [string]$s.SourceAppUserModelId
-      $srcLower = $src.ToLowerInvariant()
-      $label = switch -Wildcard ($srcLower) {
-        '*spotify*'       { 'Spotify' }
-        '*chrome*'        { 'Chrome' }
-        '*msedge*'        { 'Edge' }
-        '*firefox*'       { 'Firefox' }
-        '*vlc*'           { 'VLC' }
-        '*zune*'          { 'Groove Music' }
-        '*groove*'        { 'Groove Music' }
-        '*wmplayer*'      { 'Windows Media Player' }
-        '*media.player*'  { 'Windows Media' }
-        '*music*'         { 'Windows Media' }
-        default           { if ($src) { $src } else { 'Media' } }
-      }
-
-      $albumArtStr = $null
-      if ($props.Thumbnail) {
+      $sessions = $smgr.GetSessions()
+      $current = $smgr.GetCurrentSession()
+      $currentId = if ($current) { [string]$current.SourceAppUserModelId } else { '' }
+      $results = [System.Collections.Generic.List[hashtable]]::new()
+      foreach ($s in $sessions) {
         try {
-          $stream = Await($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
-          if ($stream) {
-            $reader = [Windows.Storage.Streams.DataReader]::new($stream.GetInputStreamAt(0))
-            $bytes = New-Object byte[] $stream.Size
-            $loadTask = $reader.LoadAsync($stream.Size)
-            Await $loadTask ([uint32]) | Out-Null
-            $reader.ReadBytes($bytes)
-            $base64 = [Convert]::ToBase64String($bytes)
-            $contentType = $stream.ContentType
-            if (-not $contentType) { $contentType = "image/jpeg" }
-            $albumArtStr = "data:" + $contentType + ";base64," + $base64
-            $reader.Dispose()
-            $stream.Dispose()
+          $props = Await($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.MediaProperties])
+          $info  = $s.GetPlaybackInfo()
+          $tl    = $s.GetTimelineProperties()
+          $src   = [string]$s.SourceAppUserModelId
+          $srcLower = $src.ToLowerInvariant()
+          $label = switch -Wildcard ($srcLower) {
+            '*spotify*'       { 'Spotify' }
+            '*chrome*'        { 'Chrome' }
+            '*msedge*'        { 'Edge' }
+            '*firefox*'       { 'Firefox' }
+            '*vlc*'           { 'VLC' }
+            '*zune*'          { 'Groove Music' }
+            '*groove*'        { 'Groove Music' }
+            '*wmplayer*'      { 'Windows Media Player' }
+            '*media.player*'  { 'Windows Media' }
+            '*music*'         { 'Windows Media' }
+            default           { if ($src) { $src } else { 'Media' } }
           }
+          $albumArtStr = $null
+          if ($src -eq $currentId -and $props.Thumbnail) {
+            try {
+              $stream = Await($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+              if ($stream) {
+                $reader = [Windows.Storage.Streams.DataReader]::new($stream.GetInputStreamAt(0))
+                $bytes = New-Object byte[] $stream.Size
+                $loadTask = $reader.LoadAsync($stream.Size)
+                Await $loadTask ([uint32]) | Out-Null
+                $reader.ReadBytes($bytes)
+                $base64 = [Convert]::ToBase64String($bytes)
+                $contentType = $stream.ContentType
+                if (-not $contentType) { $contentType = "image/jpeg" }
+                $albumArtStr = "data:" + $contentType + ";base64," + $base64
+                $reader.Dispose()
+                $stream.Dispose()
+              }
+            } catch {}
+          }
+          $results.Add(@{
+            title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
+            artist    = if ($props.Artist)      { $props.Artist }      else { '' }
+            album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
+            albumArt  = $albumArtStr
+            isPlaying = ($info.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing)
+            position  = if ($tl) { try { [math]::Round($tl.Position.TotalSeconds, 1) } catch { 0 } } else { 0 }
+            duration  = if ($tl) { try { [math]::Round($tl.EndTime.TotalSeconds, 1) } catch { 0 } } else { 0 }
+            source    = $label
+            sourceAppId = $src
+            isCurrent = ($src -eq $currentId)
+            playbackStatus = if ($info) { [string]$info.PlaybackStatus } else { '' }
+          })
         } catch {}
       }
-
-      $results.Add(@{
-        title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
-        artist    = if ($props.Artist)      { $props.Artist }      else { '' }
-        album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
-        albumArt  = $albumArtStr
-        isPlaying = ($info.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing)
-        position  = if ($tl) { try { [math]::Round($tl.Position.TotalSeconds, 1) } catch { 0 } } else { 0 }
-        duration  = if ($tl) { try { [math]::Round($tl.EndTime.TotalSeconds, 1) } catch { 0 } } else { 0 }
-        source    = $label
-        sourceAppId = $src
-        isCurrent = ($src -eq $currentId)
-        playbackStatus = if ($info) { [string]$info.PlaybackStatus } else { '' }
-      })
-    } catch { }
-  }
-  if ($results.Count -gt 0) {
-    $results | ConvertTo-Json -Compress
-  } else { '[]' }
-} catch { '[]' }
-`
-  try {
-    const out = await runPowerShell(psScript)
-    if (!out || !out.trim() || out.trim() === '[]') return []
-    let data = JSON.parse(out.trim())
-    if (!Array.isArray(data)) data = [data]
-    return data.map(s => ({
-      title: s.title || 'Unknown Title',
-      artist: s.artist || '',
-      album: s.album || '',
-      albumArt: s.albumArt || null,
-      duration: Number(s.duration) || 0,
-      position: Number(s.position) || 0,
-      isPlaying: !!s.isPlaying,
-      volume: 50,
-      source: s.source || 'Media',
-      sourceAppId: s.sourceAppId || '',
-      isCurrent: !!s.isCurrent,
-      playbackStatus: s.playbackStatus || '',
-    }))
-  } catch (e) {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error('get-media-info error:', e.message)
+      if ($results.Count -gt 0) {
+        $json = $results | ConvertTo-Json -Compress
+        Write-Output "MEDIA_JSON:$json"
+      } else {
+        Write-Output "MEDIA_JSON:[]"
+      }
+    } catch {
+      Write-Output "MEDIA_JSON:[]"
     }
-    return []
+    Start-Sleep -Milliseconds 1500
   }
-})
+} catch {
+  Write-Output "MEDIA_JSON:[]"
+}
+`
+
+  const encoded = Buffer.from(psScript, 'utf16le').toString('base64')
+  const { spawn } = require('child_process')
+  winMediaProcess = spawn('powershell', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-EncodedCommand',
+    encoded
+  ], {
+    windowsHide: true
+  })
+
+  let buffer = ''
+  winMediaProcess.stdout.on('data', (data) => {
+    buffer += data.toString()
+    let lines = buffer.split('\n')
+    buffer = lines.pop()
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('MEDIA_JSON:')) {
+        try {
+          const jsonStr = trimmed.substring('MEDIA_JSON:'.length)
+          const parsed = JSON.parse(jsonStr)
+          lastWindowsMediaData = Array.isArray(parsed) ? parsed.map(s => ({
+            title: s.title || 'Unknown Title',
+            artist: s.artist || '',
+            album: s.album || '',
+            albumArt: s.albumArt || null,
+            duration: Number(s.duration) || 0,
+            position: Number(s.position) || 0,
+            isPlaying: !!s.isPlaying,
+            volume: 50,
+            source: s.source || 'Media',
+            sourceAppId: s.sourceAppId || '',
+            isCurrent: !!s.isCurrent,
+            playbackStatus: s.playbackStatus || '',
+          })) : []
+        } catch (e) {
+          console.error('Error parsing SMTC JSON:', e.message)
+        }
+      }
+    }
+  })
+
+  winMediaProcess.on('close', () => {
+    if (app.isReady() && !app.isQuitting) {
+      setTimeout(startWindowsMediaDaemon, 5000)
+    }
+  })
+}
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
@@ -691,6 +878,28 @@ namespace EdgeGoAudio {
 }
 
 ipcMain.on('media-command', (_, command, value, source) => {
+  if (process.platform === 'darwin') {
+    let script = ''
+    let target = (source || '').toLowerCase().includes('spotify') ? 'Spotify' : 'Music'
+    if (command === 'playpause') {
+      script = `tell application "${target}" to playpause`
+    } else if (command === 'next') {
+      script = `tell application "${target}" to next track`
+    } else if (command === 'prev') {
+      script = `tell application "${target}" to previous track`
+    } else if (command === 'seek') {
+      script = `tell application "${target}" to set player position to ${value}`
+    } else if (command === 'volume') {
+      script = `tell application "${target}" to set sound volume to ${value}`
+    }
+    if (script) {
+      exec(`osascript -e '${script}'`, (err) => {
+        if (err) console.error(`macOS media-command ${command} error:`, err.message)
+      })
+    }
+    return
+  }
+
   if (command === 'volume') {
     setWindowsVolume(value).catch(e => {
       if (e.message !== 'PowerShell is only available on Windows') {
@@ -916,6 +1125,7 @@ ipcMain.on('open-devtools', (event) => {
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  startWindowsMediaDaemon()
   createWindow()
 
   try {
@@ -957,5 +1167,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  app.isQuitting = true
+  if (winMediaProcess) {
+    try {
+      winMediaProcess.kill()
+    } catch {}
+  }
   globalShortcut.unregisterAll()
 })

@@ -270,6 +270,10 @@ export default function NotchBar({
                 <SystemMonitor settings={settings} />
               )}
 
+              {settings.showBattery !== false && (
+                <BatteryIndicator battery={battery} settings={settings} />
+              )}
+
               {settings.calendarConnector !== false && settings.showCalendar !== false && (
                 <div className="calendar-connector">
                   <div className="cal-connector-header">
@@ -289,15 +293,6 @@ export default function NotchBar({
         </div>
       </div>
     </div>
-  )
-}
-
-// ── Connector pill ────────────────────────────────────────────────────────────
-function ConnectorPill({ icon, label, onClick, id }) {
-  return (
-    <button id={id} className="conn-pill" onClick={onClick} title={label}>
-      <span className="conn-pill-icon">{icon}</span>
-    </button>
   )
 }
 

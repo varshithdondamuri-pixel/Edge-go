@@ -279,12 +279,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [showVolumeHUD])
 
-  // ── Control Center window resize ──────────────────────────────────────────
+  // ── Control Center / Clipboard window resize ──────────────────────────────
   useEffect(() => {
     if (!isSettingsRoute && isElectron && window.electronAPI.setControlCenter) {
-      window.electronAPI.setControlCenter(controlCenterOpen)
+      window.electronAPI.setControlCenter(controlCenterOpen || clipboardOpen)
     }
-  }, [controlCenterOpen, isSettingsRoute])
+  }, [controlCenterOpen, clipboardOpen, isSettingsRoute])
 
   // ── Close overlays on focus loss (window blur) ──────────────────────────
   useEffect(() => {
