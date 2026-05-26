@@ -2,6 +2,18 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.4.0] - 2026-05-26
+
+### Added
+- **Windows Media Daemon**: Replaced periodic polling of SMTC media queries with a persistent background PowerShell daemon, delivering instant updates and 0% CPU polling overhead.
+- **Smooth CSS Transitions**: Implemented hardware-accelerated CSS absolute positioning for collapsed/expanded notch views to prevent layout engine reflows and stutters.
+- **Windows Resize Optimization**: Added transition-delayed window collapsing on Windows to avoid OS resizing lag and prevent content clipping.
+
+### Fixed
+- **Windows Transparent Window Visibility**: Resolved issues where the transparent window renders invisibly or black on Windows startup by setting `show: false` in BrowserWindow constructor and showing only when `ready-to-show` fires.
+- **macOS Media Info Compilation**: Fixed compile-time syntax errors in AppleScript when Spotify is not installed on macOS by isolating Spotify and Apple Music queries into independent processes.
+- **Clipboard History Overlay Clipping**: Enlarged the Electron window to full-screen when the clipboard history panel is open to prevent clipping.
+
 ## [1.3.0] - 2026-05-16
 
 ### Fixed
