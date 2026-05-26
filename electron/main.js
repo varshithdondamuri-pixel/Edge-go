@@ -587,56 +587,68 @@ function parseAppleScriptOutput(output) {
 
 function getMacSpotifyInfo() {
   return new Promise((resolve) => {
-    const script = `
-      tell application "Spotify"
-        try
-          set t_state to player state as string
-          set t_name to name of current track
-          set t_artist to artist of current track
-          set t_album to album of current track
-          set t_duration to (duration of current track) / 1000
-          set t_position to player position
-          set t_volume to sound volume
-          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
-        on error
-          return ""
-        end try
-      end tell
-    `
-    exec(`osascript -e '${script}'`, (err, stdout) => {
-      if (err || !stdout || !stdout.trim()) {
+    exec('pgrep -x "Spotify"', (err, stdout) => {
+      if (err || !stdout.trim()) {
         resolve(null)
-      } else {
-        resolve(parseAppleScriptOutput(stdout.trim()))
+        return
       }
+      const script = `
+        tell application "Spotify"
+          try
+            set t_state to player state as string
+            set t_name to name of current track
+            set t_artist to artist of current track
+            set t_album to album of current track
+            set t_duration to (duration of current track) / 1000
+            set t_position to player position
+            set t_volume to sound volume
+            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
+          on error
+            return ""
+          end try
+        end tell
+      `
+      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) {
+          resolve(null)
+        } else {
+          resolve(parseAppleScriptOutput(stdout.trim()))
+        }
+      })
     })
   })
 }
 
 function getMacMusicInfo() {
   return new Promise((resolve) => {
-    const script = `
-      tell application "Music"
-        try
-          set t_state to player state as string
-          set t_name to name of current track
-          set t_artist to artist of current track
-          set t_album to album of current track
-          set t_duration to duration of current track
-          set t_position to player position
-          set t_volume to sound volume
-          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
-        on error
-          return ""
-        end try
-      end tell
-    `
-    exec(`osascript -e '${script}'`, (err, stdout) => {
-      if (err || !stdout || !stdout.trim()) {
+    exec('pgrep -x "Music"', (err, stdout) => {
+      if (err || !stdout.trim()) {
         resolve(null)
-      } else {
-        resolve(parseAppleScriptOutput(stdout.trim()))
+        return
       }
+      const script = `
+        tell application "Music"
+          try
+            set t_state to player state as string
+            set t_name to name of current track
+            set t_artist to artist of current track
+            set t_album to album of current track
+            set t_duration to duration of current track
+            set t_position to player position
+            set t_volume to sound volume
+            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
+          on error
+            return ""
+          end try
+        end tell
+      `
+      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) {
+          resolve(null)
+        } else {
+          resolve(parseAppleScriptOutput(stdout.trim()))
+        }
+      })
     })
   })
 }
@@ -662,8 +674,24 @@ ipcMain.handle('get-media-info', async () => {
   return []
 })
 
+let winMediaRestartCount = 0
+let lastWinMediaRestartTime = 0
+
 function startWindowsMediaDaemon() {
   if (process.platform !== 'win32') return
+
+  const now = Date.now()
+  if (now - lastWinMediaRestartTime < 10000) {
+    winMediaRestartCount++
+  } else {
+    winMediaRestartCount = 0
+  }
+  lastWinMediaRestartTime = now
+
+  if (winMediaRestartCount > 5) {
+    console.warn('Windows media daemon failed repeatedly. Disabling SMTC media queries.')
+    return
+  }
 
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -798,8 +826,9 @@ try {
     }
   })
 
-  winMediaProcess.on('close', () => {
+  winMediaProcess.on('close', (code) => {
     if (app.isReady() && !app.isQuitting) {
+      // Delay restart
       setTimeout(startWindowsMediaDaemon, 5000)
     }
   })

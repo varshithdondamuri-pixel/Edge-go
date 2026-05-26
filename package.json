@@ -10,17 +10,38 @@
     "preview": "vite preview",
     "electron": "electron .",
     "dist": "vite build && electron-builder",
-    "dist:win": "vite build && electron-builder --win --x64"
+    "dist:win": "vite build && electron-builder --win --x64",
+    "dist:mac": "vite build && electron-builder --mac --arm64"
   },
   "build": {
     "appId": "com.edgego.app",
     "productName": "Edge Go",
     "executableName": "EdgeGo",
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ],
+      "icon": "public/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "dmg": {
+      "title": "Edge Go",
+      "icon": "public/icon.png"
+    },
     "win": {
-      "target": {
-        "target": "nsis",
-        "arch": ["x64"]
-      },
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
       "icon": "public/icon.png",
       "executableName": "EdgeGo"
     },
