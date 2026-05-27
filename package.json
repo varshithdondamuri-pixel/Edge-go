@@ -43,7 +43,8 @@
         }
       ],
       "icon": "public/icon.png",
-      "executableName": "EdgeGo"
+      "executableName": "EdgeGo",
+      "artifactName": "Edge-Go-Setup-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
@@ -53,7 +54,8 @@
       "shortcutName": "Edge Go",
       "uninstallDisplayName": "Edge Go",
       "license": "EULA.txt",
-      "runAfterFinish": false
+      "runAfterFinish": true,
+      "artifactName": "Edge-Go-Setup-${version}.exe"
     },
     "files": [
       "dist/**/*",
