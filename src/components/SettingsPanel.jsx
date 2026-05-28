@@ -436,19 +436,29 @@ function AdvancedTab({ s, set, onReset }) {
 }
 
 function AboutTab({ s, set }) {
+  const [appVersion, setAppVersion] = useState('1.5.0')
+
+  useEffect(() => {
+    if (window.electronAPI?.getSystemInfo) {
+      window.electronAPI.getSystemInfo().then(info => {
+        if (info?.version) setAppVersion(info.version)
+      }).catch(() => {})
+    }
+  }, [])
+
   return (
     <>
       <div className="about-hero">
         <div className="about-logo">✦</div>
         <div className="about-name">Edge Go</div>
-        <div className="about-version">v1.5.0</div>
+        <div className="about-version">v{appVersion}</div>
       </div>
       <div className="about-tagline">
         A sleek, always-on-top floating HUD bar<br />built exclusively for Windows.
       </div>
       <Section title="Version info">
         <Row label="Release name"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows Edition 🪟</span></Row>
-        <Row label="Version"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>1.5.0</span></Row>
+        <Row label="Version"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>{appVersion}</span></Row>
         <Row label="Platform"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows 10 / 11 (x64)</span></Row>
       </Section>
       <Section title="Software updates">
