@@ -2,6 +2,37 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.5.0] - 2026-05-28
+
+### Added
+- **Windows SMTC C# Bridge**: Replaced the fragile PowerShell reflection approach with a compiled C# `Add-Type` class (`SmtcBridge`) that uses proper `using Windows.Media.Control` — far more reliable across Windows 10/11 and .NET versions.
+- **Spotify Window-Title Fallback**: Two-level fallback — PowerShell `Get-Process Spotify` + Node-side `tasklist /V` — detects Artist/Track from the Spotify window title even when SMTC fails entirely.
+- **Real-time Push IPC**: `pushMediaUpdate()` now sends a `media-update` IPC event to the renderer instantly when media changes. `App.jsx` subscribes via `onMediaUpdate` alongside polling — track changes appear in under 100ms.
+- **macOS Dev Bridge**: Platform-gated `osascript` daemon (no-op on Windows) for Spotify and Apple Music — enables testing on macOS without Windows SMTC.
+- **Album Art Glow Pulse**: Subtle `albumGlow` animation on the album art while media is playing — pulses accent color every 3 seconds.
+- **`playing` CSS Class**: `MusicPlayer` now adds `.playing` to the root div, enabling CSS selectors to target the playing state.
+
+### Fixed
+- **Media not connecting**: SMTC was silently failing due to `$ErrorActionPreference = 'SilentlyContinue'` swallowing all errors. Now uses `'Stop'` with `Write-Error` and a full stderr pipe to Node console for visibility.
+- **Execution Policy Block**: Added `-ExecutionPolicy Bypass` to PowerShell spawn args so the script runs regardless of system policy.
+- **Clock hidden when Calendar disabled**: Expanded-view Clock was incorrectly gated by `showCalendar` setting. Clock is now unconditionally visible; only `CalendarMini` respects the toggle.
+- **Notch force-collapse on overlay close**: `set-control-center` IPC no longer sets `expanded=false` when the overlay closes — hover system handles collapse timing naturally.
+
+### Changed — Smoothness Overhaul
+- **Easing curves**: All transitions upgraded from Material Design linear (`cubic-bezier(0.4,0,0.2,1)`) to spring/overshoot curves (`cubic-bezier(0.34,1.20,0.64,1)`)
+- **Notch animation**: 480ms spring (was 400ms linear), plus 16ms IPC delay so CSS spring starts before native window resize — eliminates snap-then-animate flash
+- **Content crossfade**: Collapse fades out in 180ms, expand waits 120ms then fades in over 260ms — no gap between states
+- **Progress bar**: Grows from 4px → 6px on hover (spring), thumb springs in from center (`scale(0)` → `scale(1)`)
+- **Volume slider**: Expands 60px → 72px on hover (spring), thumb spring scale
+- **Play/Pause button**: `scale(1.10)` hover + enhanced glow, `scale(0.90)` press — spring curve throughout
+- **Prev/Next buttons**: `scale(1.12)` hover, `scale(0.88)` press — spring
+- **Visualizer**: Sine easing (`cubic-bezier(0.45,0,0.55,1)`), unique duration per bar (0.47s–0.65s) for organic feel
+- **GPU promotion**: `backface-visibility: hidden` on all animated layers to eliminate sub-pixel jitter
+- **Hover → expand delay**: 160ms (was 200ms) — more responsive
+- **Leave → collapse delay**: 500ms (was 400ms) — less accidental collapse
+
+---
+
 ## [1.4.0] - 2026-05-26
 
 ### Added
