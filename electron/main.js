@@ -15,6 +15,25 @@ const { exec } = require('child_process')
 
 const isDev = !app.isPackaged
 
+// ─── Single instance lock ────────────────────────────────────────────────────
+// Ensures only one copy of Edge Go runs at a time.
+// The installer uses this to detect and gracefully close the running instance.
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+}
+
+app.on('second-instance', () => {
+  // If a second instance is launched (e.g. from Start Menu while already running),
+  // focus the existing main window instead of spawning a duplicate.
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+})
+
+
 let mainWindow
 let settingsWindow
 let tray
@@ -45,7 +64,7 @@ const windowSettingsState = {
   enableWindowShadow: true,
 }
 
-const NOTCH_MERGED_HEIGHT = process.platform === 'darwin' ? 24 : 16
+const NOTCH_MERGED_HEIGHT = 16
 const NOTCH_COLLAPSED_HEIGHT = 48
 const NOTCH_EXPANDED_HEIGHT = 240
 
@@ -85,9 +104,6 @@ function getCpuUsage() {
  * escaping issues with quotes inside the script.
  */
 function runPowerShell(script) {
-  if (process.platform !== 'win32') {
-    return Promise.reject(new Error('PowerShell is only available on Windows'))
-  }
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return new Promise((resolve, reject) => {
     exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
@@ -152,8 +168,7 @@ function applyNotchBounds(animate = true) {
   const display = screen.getPrimaryDisplay()
   const sw = display.workArea.width
   const sh = display.workArea.height
-  const isMac = process.platform === 'darwin'
-  const notchY = isMac ? 0 : display.workArea.y
+  const notchY = display.workArea.y
 
   if (boundsTimeout) {
     clearTimeout(boundsTimeout)
@@ -161,8 +176,7 @@ function applyNotchBounds(animate = true) {
   }
 
   if (notchState.controlCenterOpen) {
-    const displayHeight = isMac ? display.bounds.height : sh
-    mainWindow.setBounds({ width: sw, height: displayHeight, x: 0, y: notchY }, isMac && animate)
+    mainWindow.setBounds({ width: sw, height: sh, x: 0, y: notchY }, false)
     mainWindow.setIgnoreMouseEvents(false)
     return
   }
@@ -186,21 +200,17 @@ function applyNotchBounds(animate = true) {
     x = getNotchX(sw, width)
   }
 
-  if (isMac) {
-    mainWindow.setBounds({ width, height, x, y: notchY }, animate)
-  } else {
-    const currentBounds = mainWindow.getBounds()
-    const isExpanding = (width > currentBounds.width || height > currentBounds.height)
+  const currentBounds = mainWindow.getBounds()
+  const isExpanding = (width > currentBounds.width || height > currentBounds.height)
 
-    if (isExpanding) {
-      mainWindow.setBounds({ width, height, x, y: notchY }, false)
-    } else {
-      boundsTimeout = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.setBounds({ width, height, x, y: notchY }, false)
-        }
-      }, 350)
-    }
+  if (isExpanding) {
+    mainWindow.setBounds({ width, height, x, y: notchY }, false)
+  } else {
+    boundsTimeout = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setBounds({ width, height, x, y: notchY }, false)
+      }
+    }, 350)
   }
 }
 
@@ -220,8 +230,7 @@ function sanitizeSettings(settings = {}) {
 function createWindow() {
   const display = screen.getPrimaryDisplay()
   const width = display.workArea.width
-  const isMac = process.platform === 'darwin'
-  const notchY = isMac ? 0 : display.workArea.y
+  const notchY = display.workArea.y
 
   mainWindow = new BrowserWindow({
     width: 140,
@@ -238,8 +247,6 @@ function createWindow() {
     movable: true,
     hasShadow: false,
     show: false,
-    enableLargerThanScreen: isMac,
-    titleBarStyle: isMac ? 'hidden' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -247,10 +254,6 @@ function createWindow() {
       sandbox: false,
     },
   })
-
-  if (isMac) {
-    mainWindow.setWindowButtonVisibility(false)
-  }
 
   // Load app
   if (isDev) {
@@ -377,31 +380,6 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
-  if (process.platform === 'darwin') {
-    return new Promise((resolve) => {
-      exec('pmset -g batt', (err, stdout) => {
-        if (err || !stdout) {
-          resolve({ level: 100, charging: false, available: false })
-          return
-        }
-        const lines = stdout.split('\n')
-        const line = lines.find(l => l.includes('InternalBattery'))
-        if (!line) {
-          resolve({ level: 100, charging: false, available: false })
-          return
-        }
-        const matchesPct = line.match(/(\d+)%/)
-        const level = matchesPct ? parseInt(matchesPct[1]) : 100
-        const charging = line.includes('charging') || stdout.includes('AC Power')
-        resolve({ level, charging, available: true })
-      })
-    })
-  }
-
-  if (process.platform !== 'win32') {
-    return { level: 100, charging: false, available: false }
-  }
-
   try {
     const out = await runPowerShell(`
 $battery = Get-CimInstance Win32_Battery | Select-Object -First 1
@@ -417,9 +395,7 @@ if ($battery) {
 `)
     return JSON.parse(out.trim())
   } catch (e) {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error('get-battery error:', e.message)
-    }
+    console.error('get-battery error:', e.message)
     return { level: 100, charging: false, available: false }
   }
 })
@@ -477,9 +453,7 @@ $bluetoothDevice = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue 
       bluetooth: typeof parsed.bluetooth === 'boolean' ? parsed.bluetooth : systemControlState.bluetooth,
     }
   } catch (e) {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error('get-system-state error:', e.message)
-    }
+    console.error('get-system-state error:', e.message)
     return { ...systemControlState }
   }
 }
@@ -551,9 +525,7 @@ if (${boolValue}) {
     systemControlState[control] = control === 'brightness' ? numberValue : !!value
     return { ok: true, state: { ...systemControlState } }
   } catch (e) {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error(`set-system-control ${control} error:`, e.message)
-    }
+    console.error(`set-system-control ${control} error:`, e.message)
     return { ok: false, error: e.message, state: { ...systemControlState } }
   }
 }
@@ -562,117 +534,121 @@ ipcMain.handle('get-system-state', async () => getWindowsSystemState())
 
 ipcMain.handle('set-system-control', async (_, control, value) => setSystemControl(control, value))
 
-// ─── IPC: Media Info (Windows SMTC) ─────────────────────────────────────────
+// ─── IPC: Media Info (cross-platform) ──────────────────────────────────────
 
-function parseAppleScriptOutput(output) {
-  const parts = output.split('|||')
-  if (parts.length === 8) {
-    return {
-      title: parts[0] || 'Unknown Title',
-      artist: parts[1] || '',
-      album: parts[2] || '',
-      duration: parseFloat(parts[3]) || 0,
-      position: parseFloat(parts[4]) || 0,
-      isPlaying: parts[5].toLowerCase().includes('playing'),
-      volume: parseInt(parts[6]) || 50,
-      source: parts[7] || 'Media',
-      sourceAppId: parts[7] || '',
-      isCurrent: parts[5].toLowerCase().includes('playing'),
-      playbackStatus: parts[5] || '',
-      albumArt: null,
-    }
-  }
-  return null
-}
-
-function getMacSpotifyInfo() {
-  return new Promise((resolve) => {
-    exec('pgrep -x "Spotify"', (err, stdout) => {
-      if (err || !stdout.trim()) {
-        resolve(null)
-        return
-      }
-      const script = `
-        tell application "Spotify"
-          try
-            set t_state to player state as string
-            set t_name to name of current track
-            set t_artist to artist of current track
-            set t_album to album of current track
-            set t_duration to (duration of current track) / 1000
-            set t_position to player position
-            set t_volume to sound volume
-            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
-          on error
-            return ""
-          end try
-        end tell
-      `
-      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (err, stdout) => {
-        if (err || !stdout || !stdout.trim()) {
-          resolve(null)
-        } else {
-          resolve(parseAppleScriptOutput(stdout.trim()))
-        }
-      })
-    })
-  })
-}
-
-function getMacMusicInfo() {
-  return new Promise((resolve) => {
-    exec('pgrep -x "Music"', (err, stdout) => {
-      if (err || !stdout.trim()) {
-        resolve(null)
-        return
-      }
-      const script = `
-        tell application "Music"
-          try
-            set t_state to player state as string
-            set t_name to name of current track
-            set t_artist to artist of current track
-            set t_album to album of current track
-            set t_duration to duration of current track
-            set t_position to player position
-            set t_volume to sound volume
-            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
-          on error
-            return ""
-          end try
-        end tell
-      `
-      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (err, stdout) => {
-        if (err || !stdout || !stdout.trim()) {
-          resolve(null)
-        } else {
-          resolve(parseAppleScriptOutput(stdout.trim()))
-        }
-      })
-    })
-  })
-}
+// Shared store — whichever platform daemon fills this, the renderer reads it.
+let lastMediaData = []
 
 ipcMain.handle('get-media-info', async () => {
-  if (process.platform === 'darwin') {
-    try {
-      const results = await Promise.all([
-        getMacSpotifyInfo(),
-        getMacMusicInfo()
-      ])
-      return results.filter(Boolean)
-    } catch (e) {
-      console.error('macOS get-media-info error:', e.message)
-      return []
-    }
-  }
-
-  if (process.platform === 'win32') {
-    return lastWindowsMediaData
-  }
-
-  return []
+  return lastMediaData
 })
+
+// Push updates to renderer whenever media changes
+function pushMediaUpdate(data) {
+  lastMediaData = data
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('media-update', data)
+  }
+}
+
+// ─── macOS media bridge (osascript) ─────────────────────────────────────────
+
+let macMediaTimer = null
+let lastMacMediaJson = ''
+
+function startMacMediaDaemon() {
+  if (process.platform !== 'darwin') return
+
+  const script = `
+tell application "System Events"
+  set runningApps to (name of every application process)
+end tell
+
+set mediaList to {}
+
+-- Spotify
+if "Spotify" is in runningApps then
+  try
+    tell application "Spotify"
+      if player state is not stopped then
+        set trackName to name of current track
+        set artistName to artist of current track
+        set albumName to album of current track
+        set trackDuration to (duration of current track) / 1000
+        set trackPosition to player position
+        set isPlayingNow to (player state is playing)
+        set mediaList to mediaList & {{title:trackName, artist:artistName, album:albumName, source:"Spotify", sourceAppId:"com.spotify.client", isPlaying:isPlayingNow, duration:trackDuration, position:trackPosition, isCurrent:true}}
+      end if
+    end tell
+  end try
+end if
+
+-- Music.app / Apple Music
+if "Music" is in runningApps then
+  try
+    tell application "Music"
+      if player state is not stopped then
+        set trackName to name of current track
+        set artistName to artist of current track
+        set albumName to album of current track
+        set trackDuration to duration of current track
+        set trackPosition to player position
+        set isPlayingNow to (player state is playing)
+        set mediaList to mediaList & {{title:trackName, artist:artistName, album:albumName, source:"Apple Music", sourceAppId:"com.apple.Music", isPlaying:isPlayingNow, duration:trackDuration, position:trackPosition, isCurrent:(length of mediaList = 0)}}
+      end if
+    end tell
+  end try
+end if
+
+set jsonOut to "["
+repeat with i from 1 to length of mediaList
+  set m to item i of mediaList
+  set isLast to (i = length of mediaList)
+  set jsonOut to jsonOut & "{\"title\":\"" & title of m & "\",\"artist\":\"" & artist of m & "\",\"album\":\"" & album of m & "\",\"source\":\"" & source of m & "\",\"sourceAppId\":\"" & sourceAppId of m & "\",\"isPlaying\":" & isPlaying of m & ",\"duration\":" & duration of m & ",\"position\":" & position of m & ",\"isCurrent\":" & isCurrent of m & "}"
+  if not isLast then set jsonOut to jsonOut & ","
+end repeat
+set jsonOut to jsonOut & "]"
+return jsonOut
+`
+
+  const poll = () => {
+    exec(`osascript -e '${script.replace(/'/g, "'\''")}'`, { timeout: 4000 }, (err, stdout) => {
+      if (err) {
+        // osascript failed — no media apps open, push empty
+        if (lastMacMediaJson !== '[]') {
+          lastMacMediaJson = '[]'
+          pushMediaUpdate([])
+        }
+        return
+      }
+      const raw = (stdout || '').trim()
+      if (!raw || raw === lastMacMediaJson) return
+      lastMacMediaJson = raw
+      try {
+        const parsed = JSON.parse(raw)
+        const sessions = Array.isArray(parsed) ? parsed.map(s => ({
+          title: s.title || 'Unknown',
+          artist: s.artist || '',
+          album: s.album || '',
+          albumArt: null,
+          duration: Number(s.duration) || 0,
+          position: Number(s.position) || 0,
+          isPlaying: s.isPlaying === true || s.isPlaying === 'true',
+          volume: 50,
+          source: s.source || 'Media',
+          sourceAppId: s.sourceAppId || '',
+          isCurrent: s.isCurrent === true || s.isCurrent === 'true',
+        })) : []
+        pushMediaUpdate(sessions)
+      } catch (e) {
+        console.warn('[Mac media] JSON parse error:', e.message, '| raw:', raw)
+      }
+    })
+  }
+
+  poll()
+  macMediaTimer = setInterval(poll, 2000)
+}
 
 let winMediaRestartCount = 0
 let lastWinMediaRestartTime = 0
@@ -749,36 +725,64 @@ try {
                 $reader.Dispose()
                 $stream.Dispose()
               }
-            } catch {}
-          }
-          $results.Add(@{
-            title     = if ($props.Title)       { $props.Title }       else { 'Unknown' }
-            artist    = if ($props.Artist)      { $props.Artist }      else { '' }
-            album     = if ($props.AlbumTitle)  { $props.AlbumTitle }  else { '' }
-            albumArt  = $albumArtStr
-            isPlaying = ($info.PlaybackStatus -eq [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus]::Playing)
-            position  = if ($tl) { try { [math]::Round($tl.Position.TotalSeconds, 1) } catch { 0 } } else { 0 }
-            duration  = if ($tl) { try { [math]::Round($tl.EndTime.TotalSeconds, 1) } catch { 0 } } else { 0 }
-            source    = $label
-            sourceAppId = $src
-            isCurrent = ($src -eq $currentId)
-            playbackStatus = if ($info) { [string]$info.PlaybackStatus } else { '' }
-          })
-        } catch {}
-      }
-      if ($results.Count -gt 0) {
-        $json = $results | ConvertTo-Json -Compress
-        Write-Output "MEDIA_JSON:$json"
-      } else {
-        Write-Output "MEDIA_JSON:[]"
-      }
-    } catch {
-      Write-Output "MEDIA_JSON:[]"
-    }
-    Start-Sleep -Milliseconds 1500
-  }
+  Add-Type -TypeDefinition $csCode \`
+    -ReferencedAssemblies 'System.Runtime.WindowsRuntime','Windows.Media.Control','Windows.Storage.Streams' \`
+    -Language CSharp -IgnoreWarnings 2>$null
+  $smtcOk = $true
 } catch {
-  Write-Output "MEDIA_JSON:[]"
+  Write-Error "SMTC_INIT_FAIL:$($_.Exception.Message)"
+  $smtcOk = $false
+}
+
+# ── Spotify window-title fallback ──────────────────────────────────────────
+function Get-SpotifyTitle {
+  $proc = Get-Process Spotify -ErrorAction SilentlyContinue |
+          Where-Object { $_.MainWindowTitle -and
+                         $_.MainWindowTitle -notmatch '^Spotify( Premium)?$' } |
+          Select-Object -First 1
+  if (-not $proc) { return $null }
+  $t = $proc.MainWindowTitle
+  if ($t -match '^(.+?) - (.+)$') {
+    return @{ title=$Matches[2].Trim(); artist=$Matches[1].Trim(); album='';
+              albumArt=''; isPlaying=$true; position=0; duration=0;
+              source='Spotify'; sourceAppId='com.spotify.client'; isCurrent=$true }
+  }
+  return $null
+}
+
+# ── Serialise hashtable → JSON ─────────────────────────────────────────────
+function To-Json($h) {
+  $f = @()
+  foreach ($k in $h.Keys) {
+    $v = $h[$k]
+    if ($v -is [bool])   { $f += '"'+$k+'":'+$v.ToString().ToLower() }
+    elseif ($v -is [System.ValueType]) { $f += '"'+$k+'":'+$v }
+    else { $e = ([string]$v) -replace '\\','\\\\' -replace '"','\\"' -replace "[\r\n]",' '
+           $f += '"'+$k+'":"'+$e+'"' }
+  }
+  '{' + ($f -join ',') + '}'
+}
+
+# ── Main poll loop ──────────────────────────────────────────────────────────
+while ($true) {
+  $out = '[]'
+  try {
+    if ($smtcOk) {
+      $list = [SmtcBridge]::GetSessions()
+      if ($list -and $list.Count -gt 0) {
+        $parts = foreach ($s in $list) { To-Json $s }
+        $out = '[' + ($parts -join ',') + ']'
+      } else {
+        $sp = Get-SpotifyTitle
+        if ($sp) { $out = '[' + (To-Json $sp) + ']' }
+      }
+    } else {
+      $sp = Get-SpotifyTitle
+      if ($sp) { $out = '[' + (To-Json $sp) + ']' }
+    }
+  } catch { Write-Error "POLL_ERR:$($_.Exception.Message)" }
+  Write-Output "MEDIA_JSON:$out"
+  Start-Sleep -Milliseconds 1500
 }
 `
 
@@ -787,51 +791,82 @@ try {
   winMediaProcess = spawn('powershell', [
     '-NoProfile',
     '-NonInteractive',
+    '-ExecutionPolicy', 'Bypass',
     '-EncodedCommand',
-    encoded
-  ], {
-    windowsHide: true
-  })
+    encoded,
+  ], { windowsHide: true })
 
   let buffer = ''
   winMediaProcess.stdout.on('data', (data) => {
     buffer += data.toString()
-    let lines = buffer.split('\n')
+    const lines = buffer.split('\n')
     buffer = lines.pop()
-
     for (const line of lines) {
       const trimmed = line.trim()
-      if (trimmed.startsWith('MEDIA_JSON:')) {
-        try {
-          const jsonStr = trimmed.substring('MEDIA_JSON:'.length)
-          const parsed = JSON.parse(jsonStr)
-          lastWindowsMediaData = Array.isArray(parsed) ? parsed.map(s => ({
-            title: s.title || 'Unknown Title',
-            artist: s.artist || '',
-            album: s.album || '',
-            albumArt: s.albumArt || null,
-            duration: Number(s.duration) || 0,
-            position: Number(s.position) || 0,
-            isPlaying: !!s.isPlaying,
-            volume: 50,
-            source: s.source || 'Media',
-            sourceAppId: s.sourceAppId || '',
-            isCurrent: !!s.isCurrent,
-            playbackStatus: s.playbackStatus || '',
-          })) : []
-        } catch (e) {
-          console.error('Error parsing SMTC JSON:', e.message)
-        }
+      if (!trimmed.startsWith('MEDIA_JSON:')) continue
+      try {
+        const parsed = JSON.parse(trimmed.slice('MEDIA_JSON:'.length))
+        const sessions = Array.isArray(parsed) ? parsed.map(s => ({
+          title:       s.title       || 'Unknown Title',
+          artist:      s.artist      || '',
+          album:       s.album       || '',
+          albumArt:    s.albumArt    || null,
+          duration:    Number(s.duration)  || 0,
+          position:    Number(s.position)  || 0,
+          isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
+          volume:      50,
+          source:      s.source      || 'Media',
+          sourceAppId: s.sourceAppId || '',
+          isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
+        })) : []
+        pushMediaUpdate(sessions)
+      } catch (e) {
+        console.error('[SMTC] JSON parse error:', e.message)
       }
     }
   })
 
+  winMediaProcess.stderr.on('data', (data) => {
+    const msg = data.toString().trim()
+    if (msg) console.warn('[SMTC stderr]', msg)
+  })
+
   winMediaProcess.on('close', (code) => {
+    console.log(`[SMTC] daemon exited (code=${code}), restarting in 5s…`)
     if (app.isReady() && !app.isQuitting) {
-      // Delay restart
       setTimeout(startWindowsMediaDaemon, 5000)
     }
   })
+}
+
+// ─── Spotify window-title fallback poller (Node-side, no PowerShell) ─────────
+// Activated only if the SMTC daemon fails > 5 times. Reads Spotify's window
+// title from tasklist — the title is "Artist – Song" while something plays.
+let spotifyFallbackTimer = null
+function startSpotifyFallbackPoller() {
+  if (spotifyFallbackTimer || process.platform !== 'win32') return
+  const poll = () => {
+    exec('tasklist /FI "IMAGENAME eq Spotify.exe" /FO CSV /NH /V', { timeout: 4000 }, (err, stdout) => {
+      if (err || !stdout) { pushMediaUpdate([]); return }
+      for (const line of stdout.split('\n')) {
+        const cols = line.split('","')
+        if (cols.length < 9) continue
+        const title = (cols[8] || '').replace(/"/g, '').trim()
+        if (!title || /^Spotify( Premium)?$/.test(title)) continue
+        const m = title.match(/^(.+?) - (.+)$/)
+        if (!m) continue
+        pushMediaUpdate([{
+          title: m[2].trim(), artist: m[1].trim(), album: '',
+          albumArt: null, duration: 0, position: 0, isPlaying: true,
+          volume: 50, source: 'Spotify', sourceAppId: 'com.spotify.client', isCurrent: true,
+        }])
+        return
+      }
+      pushMediaUpdate([])
+    })
+  }
+  poll()
+  spotifyFallbackTimer = setInterval(poll, 2000)
 }
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
@@ -907,33 +942,9 @@ namespace EdgeGoAudio {
 }
 
 ipcMain.on('media-command', (_, command, value, source) => {
-  if (process.platform === 'darwin') {
-    let script = ''
-    let target = (source || '').toLowerCase().includes('spotify') ? 'Spotify' : 'Music'
-    if (command === 'playpause') {
-      script = `tell application "${target}" to playpause`
-    } else if (command === 'next') {
-      script = `tell application "${target}" to next track`
-    } else if (command === 'prev') {
-      script = `tell application "${target}" to previous track`
-    } else if (command === 'seek') {
-      script = `tell application "${target}" to set player position to ${value}`
-    } else if (command === 'volume') {
-      script = `tell application "${target}" to set sound volume to ${value}`
-    }
-    if (script) {
-      exec(`osascript -e '${script}'`, (err) => {
-        if (err) console.error(`macOS media-command ${command} error:`, err.message)
-      })
-    }
-    return
-  }
-
   if (command === 'volume') {
     setWindowsVolume(value).catch(e => {
-      if (e.message !== 'PowerShell is only available on Windows') {
-        console.error('volume-command error:', e.message)
-      }
+      console.error('volume-command error:', e.message)
     })
     return
   }
@@ -1017,9 +1028,7 @@ if (-not $matched) {
 }
 `
   runPowerShell(psScript).catch(e => {
-    if (e.message !== 'PowerShell is only available on Windows') {
-      console.error('media-command error:', e.message)
-    }
+    console.error('media-command error:', e.message)
   })
 })
 
@@ -1075,8 +1084,7 @@ ipcMain.on('set-window-size', (_, { width, height }) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const display = screen.getPrimaryDisplay()
   const sw = display.workArea.width
-  const isMac = process.platform === 'darwin'
-  const notchY = isMac ? 0 : display.workArea.y
+  const notchY = display.workArea.y
   mainWindow.setBounds({ width, height, x: Math.floor(sw / 2 - width / 2), y: notchY }, true)
 })
 
@@ -1154,7 +1162,8 @@ ipcMain.on('open-devtools', (event) => {
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  startWindowsMediaDaemon()
+  startWindowsMediaDaemon()   // no-op on non-Windows
+  startMacMediaDaemon()       // no-op on non-macOS
   createWindow()
 
   try {

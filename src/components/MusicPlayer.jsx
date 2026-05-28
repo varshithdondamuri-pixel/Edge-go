@@ -35,7 +35,7 @@ export default function MusicPlayer({
   const progressPct = duration > 0 ? (position / duration) * 100 : 0
 
   return (
-    <div className="music-player">
+    <div className={`music-player${isPlaying ? ' playing' : ''}`}>
       {/* Album art + info */}
       <div className="mp-top">
         {settings.showAlbumArt !== false && (

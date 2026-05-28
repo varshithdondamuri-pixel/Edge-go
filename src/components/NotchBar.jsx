@@ -68,19 +68,24 @@ export default function NotchBar({
   const expandNotch = useCallback(() => {
     setExpanded(true)
     if (isElectron) {
-      window.electronAPI.expandWindow('expanded', {
-        expandedWidth: settings.expandedWidth,
-        collapsedWidth: settings.collapsedWidth,
-      })
+      // Tiny delay so the CSS spring starts before native window resize
+      setTimeout(() => {
+        window.electronAPI.expandWindow('expanded', {
+          expandedWidth: settings.expandedWidth,
+          collapsedWidth: settings.collapsedWidth,
+        })
+      }, 16)
     }
   }, [settings.collapsedWidth, settings.expandedWidth])
 
   const collapseNotch = useCallback(() => {
     setExpanded(false)
     if (isElectron) {
-      window.electronAPI.expandWindow('merged', {
-        collapsedWidth: settings.collapsedWidth,
-      })
+      setTimeout(() => {
+        window.electronAPI.expandWindow('merged', {
+          collapsedWidth: settings.collapsedWidth,
+        })
+      }, 16)
     }
   }, [settings.collapsedWidth])
 
@@ -103,8 +108,8 @@ export default function NotchBar({
     }
 
     if (expandTimer.current) clearTimeout(expandTimer.current)
-    // Expand to full view after 200ms hover
-    expandTimer.current = setTimeout(expandNotch, 200)
+    // Expand to full view after 160ms hover (snappy but not accidental)
+    expandTimer.current = setTimeout(expandNotch, 160)
   }, [expanded, expandNotch, settings.collapsedWidth])
 
   const handleMouseLeave = useCallback(() => {
@@ -118,7 +123,7 @@ export default function NotchBar({
     }
     
     if (collapseTimer.current) clearTimeout(collapseTimer.current)
-    collapseTimer.current = setTimeout(collapseNotch, 400) // smooth transition to merged state
+    collapseTimer.current = setTimeout(collapseNotch, 500) // give time to re-enter
   }, [collapseNotch])
 
   const handleClick = useCallback((event) => {

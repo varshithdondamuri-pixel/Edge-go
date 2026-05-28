@@ -92,17 +92,6 @@ export default function App() {
     })
   }, [])
 
-  // ── Platform Detection ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (isElectron && window.electronAPI.getSystemInfo) {
-      window.electronAPI.getSystemInfo().then(info => {
-        if (info?.platform === 'darwin') {
-          document.documentElement.classList.add('platform-darwin')
-        }
-      })
-    }
-  }, [])
-
   // ── Persist + broadcast whenever settings change ─────────────────────────
   const prevSettingsRef = useRef(null)
   useEffect(() => {
@@ -169,36 +158,47 @@ export default function App() {
     if (!isElectron || !window.electronAPI.getMediaInfo) return
     let isMounted = true
     let inFlight = false
+
+    const applyMediaSessions = (info) => {
+      if (!isMounted) return
+      const sessions = Array.isArray(info) ? filterMediaSessions(info, settings) : []
+      if (sessions.length > 0) {
+        setAllSessions(sessions)
+        const currentPlaying = sessions.find(s => s.isCurrent && s.isPlaying)
+        const current        = sessions.find(s => s.isCurrent)
+        const spotify        = sessions.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
+        const active         = sessions.find(s => s.isPlaying)
+        setMedia(currentPlaying || spotify || active || current || sessions[0] || INITIAL_MEDIA)
+      } else {
+        setAllSessions([])
+        setMedia(INITIAL_MEDIA)
+      }
+    }
+
+    // Initial fetch
     const fetchMedia = async () => {
       if (inFlight) return
       inFlight = true
       try {
         const info = await window.electronAPI.getMediaInfo()
-        if (!isMounted) return
-        const sessions = Array.isArray(info) ? filterMediaSessions(info, settings) : []
-        if (sessions.length > 0) {
-          setAllSessions(sessions)
-          // Priority: Windows current session > playing Spotify > any playing > first session
-          const currentPlaying = sessions.find(s => s.isCurrent && s.isPlaying)
-          const current = sessions.find(s => s.isCurrent)
-          const spotify = sessions.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
-          const active = sessions.find(s => s.isPlaying)
-          setMedia(currentPlaying || spotify || active || current || sessions[0] || INITIAL_MEDIA)
-        } else {
-          setAllSessions([])
-          setMedia(INITIAL_MEDIA)
-        }
-      } catch {
-      } finally {
-        inFlight = false
-      }
+        applyMediaSessions(info)
+      } catch {} finally { inFlight = false }
     }
+
     fetchMedia()
     const pollMs = (settings.mediaPollingInterval || 2) * 1000
     const id = setInterval(fetchMedia, pollMs)
+
+    // Also respond to push updates from Electron main (instant, no poll lag)
+    let unsubPush = null
+    if (window.electronAPI.onMediaUpdate) {
+      unsubPush = window.electronAPI.onMediaUpdate((info) => applyMediaSessions(info))
+    }
+
     return () => {
       isMounted = false
       clearInterval(id)
+      if (unsubPush) unsubPush()
     }
   }, [
     settings.mediaPollingInterval,
