@@ -2,6 +2,13 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.5.1] - 2026-05-29
+
+### Fixed
+- **Windows system control permissions**: Upgraded Wi-Fi and Bluetooth controls to use non-administrative WinRT `Windows.Devices.Radios.Radio` APIs to prevent permission denied errors.
+- **Windows SMTC C# Bridge**: Restored the missing C# `SmtcBridge` class definition in the media daemon.
+- **macOS Cleanup**: Removed all unwanted macOS dev bridge control files and routes.
+
 ## [1.5.0] - 2026-05-28
 
 ### Added
