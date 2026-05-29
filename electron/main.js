@@ -423,6 +423,8 @@ ipcMain.handle('get-system-usage', () => {
   }
 })
 
+
+
 async function getWindowsSystemState() {
   if (process.platform !== 'win32') return { ...systemControlState }
 
@@ -431,17 +433,31 @@ async function getWindowsSystemState() {
 $ErrorActionPreference = 'SilentlyContinue'
 $brightness = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness | Select-Object -First 1).CurrentBrightness
 $toast = (Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -ErrorAction SilentlyContinue).NOC_GLOBAL_SETTING_TOASTS_ENABLED
-$wifiAdapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
-  $_.Name -match 'Wi-Fi|Wireless|WLAN' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|WLAN'
-} | Select-Object -First 1
-$bluetoothDevice = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object {
-  $_.InstanceId -notmatch '^BTHENUM' -and $_.FriendlyName -match 'Bluetooth'
-} | Select-Object -First 1
+
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { 
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' 
+})[0]
+function Await($WinRtTask, $ResultType) {
+  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  $netTask.Wait(-1) | Out-Null
+  $netTask.Result
+}
+[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+[Windows.Devices.Radios.RadioAccessStatus,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+
+$null = Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])
+$radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])
+
+$wifiRadio = $radios | Where-Object { $_.Kind -eq 'WiFi' }
+$bluetoothRadio = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
+
 [PSCustomObject]@{
   brightness = if ($brightness -ne $null) { [int]$brightness } else { $null }
   dnd = ($toast -eq 0)
-  wifi = if ($wifiAdapter) { $wifiAdapter.Status -ne 'Disabled' } else { $null }
-  bluetooth = if ($bluetoothDevice) { $bluetoothDevice.Status -eq 'OK' } else { $null }
+  wifi = if ($wifiRadio) { $wifiRadio.State -eq 'On' } else { $null }
+  bluetooth = if ($bluetoothRadio) { $bluetoothRadio.State -eq 'On' } else { $null }
 } | ConvertTo-Json -Compress
 `)
     const parsed = JSON.parse(out.trim())
@@ -482,29 +498,30 @@ if ($data -and $data.Length -gt 24) {
   Set-ItemProperty -Path $path -Name 'Data' -Value $data
 }
 `
-  } else if (control === 'wifi') {
+  } else if (control === 'wifi' || control === 'bluetooth') {
+    const radioKind = control === 'wifi' ? 'WiFi' : 'Bluetooth'
     script = `
-$adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
-  $_.Name -match 'Wi-Fi|Wireless|WLAN' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|WLAN'
-} | Select-Object -First 1
-if (-not $adapter) { throw 'No Wi-Fi adapter found' }
-if (${boolValue}) {
-  Enable-NetAdapter -Name $adapter.Name -Confirm:$false
-} else {
-  Disable-NetAdapter -Name $adapter.Name -Confirm:$false
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { 
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' 
+})[0]
+function Await($WinRtTask, $ResultType) {
+  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  $netTask.Wait(-1) | Out-Null
+  $netTask.Result
 }
-`
-  } else if (control === 'bluetooth') {
-    script = `
-$device = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Where-Object {
-  $_.InstanceId -notmatch '^BTHENUM' -and $_.FriendlyName -match 'Bluetooth'
-} | Select-Object -First 1
-if (-not $device) { throw 'No Bluetooth adapter found' }
-if (${boolValue}) {
-  Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
-} else {
-  Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false
-}
+[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+[Windows.Devices.Radios.RadioAccessStatus,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
+
+$null = Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus])
+$radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) ([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]])
+
+$radio = $radios | Where-Object { $_.Kind -eq '${radioKind}' }
+if (-not $radio) { throw '${radioKind} radio not found' }
+$state = if (${boolValue}) { 'On' } else { 'Off' }
+[void](Await ($radio.SetStateAsync($state)) ([Windows.Devices.Radios.RadioAccessStatus]))
 `
   } else if (control === 'airplaneMode') {
     if (value) {
@@ -672,62 +689,86 @@ function startWindowsMediaDaemon() {
   const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-try {
-  Add-Type -AssemblyName System.Runtime.WindowsRuntime
-  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
-  function Await($WinRtTask, $ResultType) {
-    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-    $netTask = $asTask.Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-    $netTask.Result
-  }
-  $smgr = Await([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
-  while ($true) {
-    try {
-      $sessions = $smgr.GetSessions()
-      $current = $smgr.GetCurrentSession()
-      $currentId = if ($current) { [string]$current.SourceAppUserModelId } else { '' }
-      $results = [System.Collections.Generic.List[hashtable]]::new()
-      foreach ($s in $sessions) {
+
+$csCode = @"
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using Windows.Media.Control;
+using Windows.Storage.Streams;
+
+public class SmtcBridge {
+    public static List<Hashtable> GetSessions() {
+        var results = new List<Hashtable>();
         try {
-          $props = Await($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.MediaProperties])
-          $info  = $s.GetPlaybackInfo()
-          $tl    = $s.GetTimelineProperties()
-          $src   = [string]$s.SourceAppUserModelId
-          $srcLower = $src.ToLowerInvariant()
-          $label = switch -Wildcard ($srcLower) {
-            '*spotify*'       { 'Spotify' }
-            '*chrome*'        { 'Chrome' }
-            '*msedge*'        { 'Edge' }
-            '*firefox*'       { 'Firefox' }
-            '*vlc*'           { 'VLC' }
-            '*zune*'          { 'Groove Music' }
-            '*groove*'        { 'Groove Music' }
-            '*wmplayer*'      { 'Windows Media Player' }
-            '*media.player*'  { 'Windows Media' }
-            '*music*'         { 'Windows Media' }
-            default           { if ($src) { $src } else { 'Media' } }
-          }
-          $albumArtStr = $null
-          if ($src -eq $currentId -and $props.Thumbnail) {
-            try {
-              $stream = Await($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
-              if ($stream) {
-                $reader = [Windows.Storage.Streams.DataReader]::new($stream.GetInputStreamAt(0))
-                $bytes = New-Object byte[] $stream.Size
-                $loadTask = $reader.LoadAsync($stream.Size)
-                Await $loadTask ([uint32]) | Out-Null
-                $reader.ReadBytes($bytes)
-                $base64 = [Convert]::ToBase64String($bytes)
-                $contentType = $stream.ContentType
-                if (-not $contentType) { $contentType = "image/jpeg" }
-                $albumArtStr = "data:" + $contentType + ";base64," + $base64
-                $reader.Dispose()
-                $stream.Dispose()
-              }
-  Add-Type -TypeDefinition $csCode \`
-    -ReferencedAssemblies 'System.Runtime.WindowsRuntime','Windows.Media.Control','Windows.Storage.Streams' \`
-    -Language CSharp -IgnoreWarnings 2>$null
+            var manager = GlobalSystemMediaTransportControlsSessionManager.RequestAsync().GetResults();
+            if (manager == null) return results;
+            
+            var sessions = manager.GetSessions();
+            var currentSession = manager.GetCurrentSession();
+            string currentId = currentSession != null ? currentSession.SourceAppUserModelId : "";
+            
+            foreach (var session in sessions) {
+                try {
+                    var props = session.TryGetMediaPropertiesAsync().GetResults();
+                    var info = session.GetPlaybackInfo();
+                    var timeline = session.GetTimelineProperties();
+                    string src = session.SourceAppUserModelId;
+                    string srcLower = src.ToLowerInvariant();
+                    
+                    string label = srcLower.Contains("spotify") ? "Spotify" :
+                                   srcLower.Contains("chrome") ? "Chrome" :
+                                   srcLower.Contains("msedge") ? "Edge" :
+                                   srcLower.Contains("firefox") ? "Firefox" :
+                                   srcLower.Contains("vlc") ? "VLC" :
+                                   srcLower.Contains("zune") || srcLower.Contains("groove") ? "Groove Music" :
+                                   srcLower.Contains("wmplayer") ? "Windows Media Player" :
+                                   srcLower.Contains("media.player") || srcLower.Contains("music") ? "Windows Media" :
+                                   (!string.IsNullOrEmpty(src) ? src : "Media");
+                                   
+                    string albumArtStr = null;
+                    if (src == currentId && props.Thumbnail != null) {
+                        try {
+                            var stream = props.Thumbnail.OpenReadAsync().GetResults();
+                            if (stream != null) {
+                                var size = stream.Size;
+                                var reader = new DataReader(stream.GetInputStreamAt(0));
+                                reader.LoadAsync((uint)size).GetResults();
+                                byte[] bytes = new byte[size];
+                                reader.ReadBytes(bytes);
+                                string base64 = Convert.ToBase64String(bytes);
+                                string contentType = stream.ContentType;
+                                if (string.IsNullOrEmpty(contentType)) contentType = "image/jpeg";
+                                albumArtStr = "data:" + contentType + ";base64," + base64;
+                                reader.Dispose();
+                                stream.Dispose();
+                            }
+                        } catch { }
+                    }
+                    
+                    var h = new Hashtable();
+                    h["title"] = props.Title ?? "Unknown";
+                    h["artist"] = props.Artist ?? "";
+                    h["album"] = props.AlbumTitle ?? "";
+                    h["albumArt"] = albumArtStr;
+                    h["isPlaying"] = info != null && info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                    h["position"] = timeline != null ? Math.Round(timeline.Position.TotalSeconds, 1) : 0.0;
+                    h["duration"] = timeline != null ? Math.Round(timeline.EndTime.TotalSeconds, 1) : 0.0;
+                    h["source"] = label;
+                    h["sourceAppId"] = src ?? "";
+                    h["isCurrent"] = src == currentId;
+                    
+                    results.Add(h);
+                } catch { }
+            }
+        } catch { }
+        return results;
+    }
+}
+"@
+
+try {
+  Add-Type -TypeDefinition $csCode -ReferencedAssemblies 'System.Runtime.WindowsRuntime','Windows.Media.Control','Windows.Storage.Streams' -Language CSharp -IgnoreWarnings 2>$null
   $smtcOk = $true
 } catch {
   Write-Error "SMTC_INIT_FAIL:$($_.Exception.Message)"
@@ -757,7 +798,7 @@ function To-Json($h) {
     $v = $h[$k]
     if ($v -is [bool])   { $f += '"'+$k+'":'+$v.ToString().ToLower() }
     elseif ($v -is [System.ValueType]) { $f += '"'+$k+'":'+$v }
-    else { $e = ([string]$v) -replace '\\','\\\\' -replace '"','\\"' -replace "[\r\n]",' '
+    else { $e = ([string]$v) -replace '\\\\','\\\\' -replace '"','\\"' -replace "[\\r\\n]",' '
            $f += '"'+$k+'":"'+$e+'"' }
   }
   '{' + ($f -join ',') + '}'
