@@ -436,7 +436,7 @@ function AdvancedTab({ s, set, onReset }) {
 }
 
 function AboutTab({ s, set }) {
-  const [appVersion, setAppVersion] = useState('1.5.1')
+  const [appVersion, setAppVersion] = useState('1.6.0')
 
   useEffect(() => {
     if (window.electronAPI?.getSystemInfo) {

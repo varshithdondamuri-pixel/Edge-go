@@ -2,6 +2,13 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.6.0] - 2026-05-29
+
+### Added
+- **System Volume Synchronization**: Added real-time volume fetching (polling every 10 seconds via IPC/PowerShell on Windows) and hotkey listeners (`AudioVolumeUp`/`AudioVolumeDown`/`AudioVolumeMute`).
+- **Wi-Fi Network Scanner & Connector**: Implemented scanning and list display of nearby Wi-Fi networks, along with support for connecting to saved Wi-Fi networks directly from the HUD on Windows.
+- **Control Center Dropdown**: Added Wi-Fi network listing dropdown, connecting/loading states, and updated styled controls.
+
 ## [1.5.1] - 2026-05-29
 
 ### Fixed
