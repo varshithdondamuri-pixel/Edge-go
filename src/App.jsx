@@ -50,6 +50,34 @@ function filterMediaSessions(sessions, settings) {
   })
 }
 
+// Leading-and-trailing throttle-debounce helper
+function throttleDebounce(func, delay) {
+  let timeoutId = null
+  let lastArgs = null
+  let lastCalled = 0
+
+  return function(...args) {
+    const now = Date.now()
+    lastArgs = args
+
+    if (now - lastCalled >= delay) {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      func.apply(this, args)
+      lastCalled = now
+    } else {
+      if (timeoutId) clearTimeout(timeoutId)
+      timeoutId = setTimeout(() => {
+        func.apply(this, lastArgs)
+        lastCalled = Date.now()
+        timeoutId = null
+      }, delay - (now - lastCalled))
+    }
+  }
+}
+
 export default function App() {
   const [media, setMedia] = useState(INITIAL_MEDIA)
   const [allSessions, setAllSessions] = useState([])
@@ -251,12 +279,19 @@ export default function App() {
       window.electronAPI.mediaCommand('prev', null, media.sourceAppId || media.source)
   }, [media.source, media.sourceAppId])
 
+  const throttledVolumeIPC = useRef(
+    throttleDebounce((level, sourceAppId, source) => {
+      if (isElectron && window.electronAPI.mediaCommand) {
+        window.electronAPI.mediaCommand('volume', level, sourceAppId || source)
+      }
+    }, 150)
+  ).current
+
   const handleVolumeChange = useCallback((level) => {
-    if (isElectron && window.electronAPI.mediaCommand)
-      window.electronAPI.mediaCommand('volume', level, media.sourceAppId || media.source)
     setMedia(m => ({ ...m, volume: level }))
     showVolumeHUD(level)
-  }, [showVolumeHUD, media.source, media.sourceAppId])
+    throttledVolumeIPC(level, media.sourceAppId, media.source)
+  }, [showVolumeHUD, media.source, media.sourceAppId, throttledVolumeIPC])
 
   const handleSeek = useCallback((position) => {
     if (isElectron && window.electronAPI.mediaCommand)

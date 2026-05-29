@@ -1,4 +1,32 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+
+// Leading-and-trailing throttle-debounce helper
+function throttleDebounce(func, delay) {
+  let timeoutId = null
+  let lastArgs = null
+  let lastCalled = 0
+
+  return function(...args) {
+    const now = Date.now()
+    lastArgs = args
+
+    if (now - lastCalled >= delay) {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      func.apply(this, args)
+      lastCalled = now
+    } else {
+      if (timeoutId) clearTimeout(timeoutId)
+      timeoutId = setTimeout(() => {
+        func.apply(this, lastArgs)
+        lastCalled = Date.now()
+        timeoutId = null
+      }, delay - (now - lastCalled))
+    }
+  }
+}
 
 // ─── Control tiles config ────────────────────────────────────────────────────
 
@@ -28,6 +56,12 @@ export default function ControlCenter({
   const [showNetworks, setShowNetworks] = useState(false)
   const [connectedNetwork, setConnectedNetwork] = useState(WIFI_NETWORKS[0])
   const [focusMode, setFocusMode] = useState('off') // off | work | personal | sleep
+
+  const throttledBrightnessIPC = useRef(
+    throttleDebounce((val) => {
+      applySystemControl('brightness', val)
+    }, 150)
+  ).current
 
   // Sync with system state on open
   useEffect(() => {
@@ -314,7 +348,7 @@ export default function ControlCenter({
                   onChange={e => {
                     const val = Number(e.target.value);
                     setBrightness(val);
-                    applySystemControl('brightness', val);
+                    throttledBrightnessIPC(val);
                   }}
                   className="cc-slider"
                   aria-label="Brightness"
