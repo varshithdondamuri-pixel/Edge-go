@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 // Leading-and-trailing throttle-debounce helper
 function throttleDebounce(func, delay) {
@@ -30,10 +30,10 @@ function throttleDebounce(func, delay) {
 
 // ─── Control tiles config ────────────────────────────────────────────────────
 
-const WIFI_NETWORKS = [
-  { id: 'n1', name: 'HomeNetwork_5G', strength: 4, secured: true },
-  { id: 'n2', name: 'CoffeeShop_Free', strength: 2, secured: false },
-  { id: 'n3', name: 'Office_WiFi', strength: 3, secured: true },
+const FALLBACK_WIFI_NETWORKS = [
+  { id: 'n1', name: 'HomeNetwork_5G', strength: 4, secured: true, connected: true, saved: true },
+  { id: 'n2', name: 'CoffeeShop_Free', strength: 2, secured: false, connected: false, saved: false },
+  { id: 'n3', name: 'Office_WiFi', strength: 3, secured: true, connected: false, saved: true },
 ]
 
 export default function ControlCenter({ 
@@ -54,14 +54,47 @@ export default function ControlCenter({
   const [airplaneMode, setAirplaneMode] = useState(false)
   const [brightness, setBrightness] = useState(72)
   const [showNetworks, setShowNetworks] = useState(false)
-  const [connectedNetwork, setConnectedNetwork] = useState(WIFI_NETWORKS[0])
+  const [wifiNetworks, setWifiNetworks] = useState(FALLBACK_WIFI_NETWORKS)
+  const [connectedNetwork, setConnectedNetwork] = useState(FALLBACK_WIFI_NETWORKS[0])
   const [focusMode, setFocusMode] = useState('off') // off | work | personal | sleep
+  const [pendingControls, setPendingControls] = useState({})
+  const [connectingNetworkId, setConnectingNetworkId] = useState(null)
+  const [screenshotActive, setScreenshotActive] = useState(false)
+  const screenshotTimerRef = useRef(null)
 
-  const throttledBrightnessIPC = useRef(
-    throttleDebounce((val) => {
-      applySystemControl('brightness', val)
-    }, 150)
-  ).current
+  const setControlPending = useCallback((control, pending) => {
+    setPendingControls(prev => ({ ...prev, [control]: pending }))
+  }, [])
+
+  const applySystemControl = useCallback(async (control, value, revert, options = {}) => {
+    const track = options.track !== false
+    if (track) setControlPending(control, true)
+    if (!window.electronAPI?.setSystemControl) {
+      if (track) setControlPending(control, false)
+      return true
+    }
+    try {
+      const result = await window.electronAPI.setSystemControl(control, value)
+      if (result?.ok === false) {
+        revert?.()
+        return false
+      }
+      return true
+    } catch {
+      revert?.()
+      return false
+    } finally {
+      if (track) setControlPending(control, false)
+    }
+  }, [setControlPending])
+
+  const throttledBrightnessRef = useRef(null)
+  if (!throttledBrightnessRef.current) {
+    throttledBrightnessRef.current = throttleDebounce((val) => {
+      applySystemControl('brightness', val, null, { track: false })
+    }, 180)
+  }
+  const throttledBrightnessIPC = throttledBrightnessRef.current
 
   // Sync with system state on open
   useEffect(() => {
@@ -83,10 +116,28 @@ export default function ControlCenter({
           console.error('Failed to sync system state:', e)
         }
       }
+
+      if (window.electronAPI?.getWifiNetworks) {
+        try {
+          const networks = await window.electronAPI.getWifiNetworks()
+          if (Array.isArray(networks) && networks.length > 0) {
+            setWifiNetworks(networks)
+            setConnectedNetwork(networks.find(net => net.connected) || networks[0])
+          }
+        } catch (e) {
+          console.error('Failed to load Wi-Fi networks:', e)
+        }
+      }
     }
 
     syncSystemState()
   }, [open])
+
+  useEffect(() => {
+    return () => {
+      if (screenshotTimerRef.current) clearTimeout(screenshotTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -97,22 +148,10 @@ export default function ControlCenter({
 
   if (!open) return null
 
-  const applySystemControl = async (control, value, revert) => {
-    if (!window.electronAPI?.setSystemControl) return true
-    try {
-      const result = await window.electronAPI.setSystemControl(control, value)
-      if (result?.ok === false) {
-        revert?.()
-        return false
-      }
-      return true
-    } catch {
-      revert?.()
-      return false
-    }
-  }
+  const isPending = (control) => !!pendingControls[control]
 
   const toggleWifi = () => {
+    if (isPending('wifi') || isPending('airplaneMode')) return
     const next = !wifi
     if (!next) setShowNetworks(false)
     setWifi(next)
@@ -120,6 +159,7 @@ export default function ControlCenter({
   }
 
   const toggleDnd = () => {
+    if (isPending('dnd')) return
     const previous = dnd
     const next = !dnd
     setDnd(next)
@@ -131,18 +171,21 @@ export default function ControlCenter({
   }
 
   const toggleNightLight = () => {
+    if (isPending('nightLight')) return
     const next = !nightLight
     setNightLight(next)
     applySystemControl('nightLight', next, () => setNightLight(!next))
   }
 
   const toggleBluetooth = () => {
+    if (isPending('bluetooth') || isPending('airplaneMode')) return
     const next = !bluetooth
     setBluetooth(next)
     applySystemControl('bluetooth', next, () => setBluetooth(!next))
   }
 
   const toggleAirplaneMode = () => {
+    if (isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')) return
     const next = !airplaneMode
     const prevWifi = wifi
     const prevBluetooth = bluetooth
@@ -151,12 +194,80 @@ export default function ControlCenter({
       setWifi(false)
       setBluetooth(false)
       setShowNetworks(false)
+    } else {
+      setWifi(true)
+      setBluetooth(true)
     }
     applySystemControl('airplaneMode', next, () => {
       setAirplaneMode(!next)
       setWifi(prevWifi)
       setBluetooth(prevBluetooth)
     })
+  }
+
+  const selectFocusMode = (modeId) => {
+    if (isPending('dnd')) return
+    const previousMode = focusMode
+    const previousDnd = dnd
+    const isDnd = modeId !== 'off'
+    setFocusMode(modeId)
+    setDnd(isDnd)
+    applySystemControl('dnd', isDnd, () => {
+      setDnd(previousDnd)
+      setFocusMode(previousMode)
+    })
+  }
+
+  const selectNetwork = async (network) => {
+    if (!wifi || connectingNetworkId) return
+    const previous = connectedNetwork
+    setConnectedNetwork(network)
+    setWifiNetworks(networks => networks.map(net => ({
+      ...net,
+      connected: net.id === network.id,
+    })))
+    setShowNetworks(false)
+
+    if (!window.electronAPI?.connectWifiNetwork) return
+
+    setConnectingNetworkId(network.id)
+    try {
+      const result = await window.electronAPI.connectWifiNetwork(network.name)
+      if (result?.ok === false) {
+        setConnectedNetwork(previous)
+        setWifiNetworks(networks => networks.map(net => ({
+          ...net,
+          connected: previous ? net.id === previous.id : false,
+        })))
+        setShowNetworks(true)
+      }
+    } catch {
+      setConnectedNetwork(previous)
+      setWifiNetworks(networks => networks.map(net => ({
+        ...net,
+        connected: previous ? net.id === previous.id : false,
+      })))
+      setShowNetworks(true)
+    } finally {
+      setConnectingNetworkId(null)
+    }
+  }
+
+  const takeScreenshot = () => {
+    setScreenshotActive(true)
+    if (screenshotTimerRef.current) clearTimeout(screenshotTimerRef.current)
+    screenshotTimerRef.current = setTimeout(() => setScreenshotActive(false), 900)
+    window.electronAPI?.takeScreenshot?.()
+  }
+
+  const handleBrightnessChange = (event) => {
+    const val = Number(event.target.value)
+    setBrightness(val)
+    throttledBrightnessIPC(val)
+  }
+
+  const handleVolumeInput = (event) => {
+    onVolumeChange?.(Number(event.target.value))
   }
 
   return (
@@ -173,13 +284,13 @@ export default function ControlCenter({
         <div className="cc-header">
           <span className="cc-title">Control Center</span>
           <div className="cc-header-actions">
-            <button className="cc-settings-btn" onClick={() => onOpenSettings?.('general')} aria-label="Settings" title="Open Settings">
+            <button type="button" className="cc-settings-btn" onClick={() => onOpenSettings?.('general')} aria-label="Settings" title="Open Settings">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
               </svg>
             </button>
-            <button className="cc-close" onClick={onClose} aria-label="Close">✕</button>
+            <button type="button" className="cc-close" onClick={onClose} aria-label="Close">✕</button>
           </div>
         </div>
 
@@ -203,17 +314,17 @@ export default function ControlCenter({
                       <div className="cc-media-artist">{session.artist} • {session.source}</div>
                     </div>
                     <div className="cc-media-controls">
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
                       </button>
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
                         {session.isPlaying ? (
                           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                         ) : (
                           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                         )}
                       </button>
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
+                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
                       </button>
                     </div>
@@ -226,20 +337,30 @@ export default function ControlCenter({
           {/* ── Row 1: Network tile group ── */}
           <div className="cc-tile-group cc-network-group">
             {/* Wi-Fi */}
-            <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''}`}>
-              <div className="cc-tile-inner" onClick={toggleWifi}>
+            <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''} ${isPending('wifi') ? 'pending' : ''}`}>
+              <button
+                type="button"
+                id="cc-wifi-toggle"
+                className="cc-tile-inner"
+                onClick={toggleWifi}
+                disabled={isPending('wifi') || isPending('airplaneMode')}
+                aria-pressed={wifi}
+              >
                 <div className="cc-tile-icon">
                   <WifiIcon2 active={wifi} />
                 </div>
                 <div className="cc-tile-info">
                   <div className="cc-tile-name">Wi-Fi</div>
-                  <div className="cc-tile-sub">{wifi ? connectedNetwork.name : 'Off'}</div>
+                  <div className="cc-tile-sub">{wifi ? connectedNetwork?.name || 'On' : 'Off'}</div>
                 </div>
-              </div>
+              </button>
               {wifi && (
                 <button
+                  type="button"
+                  id="cc-network-expand"
                   className="cc-tile-expand"
                   onClick={(e) => { e.stopPropagation(); setShowNetworks(v => !v) }}
+                  disabled={isPending('wifi') || isPending('airplaneMode')}
                   aria-label="Show networks"
                   title="Networks"
                 >
@@ -249,53 +370,58 @@ export default function ControlCenter({
             </div>
 
             {/* Bluetooth */}
-            <div
-              className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''}`}
+            <button
+              type="button"
+              id="cc-bluetooth"
+              className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
               onClick={toggleBluetooth}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleBluetooth() }}
+              disabled={isPending('bluetooth') || isPending('airplaneMode')}
+              aria-pressed={bluetooth}
             >
               <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
               <div className="cc-tile-info">
                 <div className="cc-tile-name">Bluetooth</div>
                 <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
               </div>
-            </div>
+            </button>
 
             {/* Airplane */}
-            <div
-              className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''}`}
+            <button
+              type="button"
+              id="cc-airplane"
+              className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
               onClick={toggleAirplaneMode}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleAirplaneMode() }}
+              disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')}
+              aria-pressed={airplaneMode}
             >
               <div className="cc-tile-icon">✈️</div>
               <div className="cc-tile-info">
                 <div className="cc-tile-name">Airplane</div>
                 <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* ── Wi-Fi Networks dropdown ── */}
           {wifi && showNetworks && (
             <div className="cc-network-list" role="listbox" aria-label="Available networks">
               <div className="cc-network-list-title">Available Networks</div>
-              {WIFI_NETWORKS.map(net => (
-                <div
+              {wifiNetworks.map(net => (
+                <button
+                  type="button"
                   key={net.id}
-                  className={`cc-network-item ${connectedNetwork.id === net.id ? 'connected' : ''}`}
+                  className={`cc-network-item ${connectedNetwork?.id === net.id ? 'connected' : ''} ${connectingNetworkId === net.id ? 'pending' : ''}`}
                   role="option"
-                  aria-selected={connectedNetwork.id === net.id}
-                  onClick={() => { setConnectedNetwork(net); setShowNetworks(false) }}
+                  aria-selected={connectedNetwork?.id === net.id}
+                  disabled={!!connectingNetworkId}
+                  onClick={() => selectNetwork(net)}
                 >
                   <WifiSignal strength={net.strength} />
                   <span className="cc-net-name">{net.name}</span>
-                  {net.secured && <span className="cc-net-lock">🔒</span>}
-                  {connectedNetwork.id === net.id && <span className="cc-net-check">✓</span>}
-                </div>
+                  {net.secured && <span className="cc-net-lock" aria-label="Secured">🔒</span>}
+                  {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
+                  {connectedNetwork?.id === net.id && <span className="cc-net-check">✓</span>}
+                </button>
               ))}
             </div>
           )}
@@ -311,19 +437,12 @@ export default function ControlCenter({
                 { id: 'sleep',    icon: '🌙', label: 'Sleep' },
               ].map(f => (
                 <button
+                  type="button"
                   key={f.id}
                   className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
-                  onClick={() => {
-                    const previousMode = focusMode
-                    const previousDnd = dnd
-                    const isDnd = f.id !== 'off'
-                    setFocusMode(f.id)
-                    setDnd(isDnd)
-                    applySystemControl('dnd', isDnd, () => {
-                      setDnd(previousDnd)
-                      setFocusMode(previousMode)
-                    })
-                  }}
+                  onClick={() => selectFocusMode(f.id)}
+                  disabled={isPending('dnd')}
+                  aria-pressed={focusMode === f.id}
                   id={`focus-${f.id}`}
                 >
                   <span className="cc-focus-pill-icon">{f.icon}</span>
@@ -345,13 +464,11 @@ export default function ControlCenter({
                   id="cc-brightness"
                   type="range" min={0} max={100}
                   value={brightness}
-                  onChange={e => {
-                    const val = Number(e.target.value);
-                    setBrightness(val);
-                    throttledBrightnessIPC(val);
-                  }}
+                  onInput={handleBrightnessChange}
+                  onChange={handleBrightnessChange}
                   className="cc-slider"
                   aria-label="Brightness"
+                  aria-valuetext={`${brightness}%`}
                 />
               </div>
               <span className="cc-slider-val">{brightness}%</span>
@@ -367,9 +484,11 @@ export default function ControlCenter({
                   id="cc-volume"
                   type="range" min={0} max={100}
                   value={mediaVolume}
-                  onChange={e => onVolumeChange && onVolumeChange(Number(e.target.value))}
+                  onInput={handleVolumeInput}
+                  onChange={handleVolumeInput}
                   className="cc-slider"
                   aria-label="Volume"
+                  aria-valuetext={`${mediaVolume}%`}
                 />
               </div>
               <span className="cc-slider-val">{mediaVolume}%</span>
@@ -383,6 +502,7 @@ export default function ControlCenter({
               icon={dnd ? '🔕' : '🔔'}
               label="DND"
               active={dnd}
+              disabled={isPending('dnd')}
               onClick={toggleDnd}
             />
             <QuickTile
@@ -390,16 +510,15 @@ export default function ControlCenter({
               icon="🌙"
               label="Night Light"
               active={nightLight}
+              disabled={isPending('nightLight')}
               onClick={toggleNightLight}
             />
             <QuickTile
               id="qt-screenshot"
               icon="📸"
               label="Screenshot"
-              active={false}
-              onClick={() => {
-                if (window.electronAPI?.takeScreenshot) window.electronAPI.takeScreenshot()
-              }}
+              active={screenshotActive}
+              onClick={takeScreenshot}
             />
             <QuickTile
               id="qt-clipboard"
@@ -447,9 +566,17 @@ export default function ControlCenter({
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function QuickTile({ id, icon, label, active, onClick }) {
+function QuickTile({ id, icon, label, active, disabled = false, onClick }) {
   return (
-    <button type="button" id={id} className={`qt-tile ${active ? 'active' : ''}`} onClick={onClick}>
+    <button
+      type="button"
+      id={id}
+      className={`qt-tile ${active ? 'active' : ''}`}
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      title={label}
+    >
       <span className="qt-icon">{icon}</span>
       <span className="qt-label">{label}</span>
     </button>

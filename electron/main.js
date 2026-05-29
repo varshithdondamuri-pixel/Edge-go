@@ -121,6 +121,10 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
+function psSingleQuote(value) {
+  return `'${String(value ?? '').replace(/'/g, "''")}'`
+}
+
 function getPrimaryWorkArea() {
   return screen.getPrimaryDisplay().workAreaSize
 }
@@ -475,6 +479,106 @@ $bluetoothRadio = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
   }
 }
 
+async function getWindowsWifiNetworks() {
+  if (process.platform !== 'win32') {
+    return [
+      { id: 'n1', name: 'HomeNetwork_5G', strength: 4, secured: true, connected: true, saved: true },
+      { id: 'n2', name: 'CoffeeShop_Free', strength: 2, secured: false, connected: false, saved: false },
+      { id: 'n3', name: 'Office_WiFi', strength: 3, secured: true, connected: false, saved: true },
+    ]
+  }
+
+  try {
+    const out = await runPowerShell(`
+$ErrorActionPreference = 'SilentlyContinue'
+$connected = ''
+foreach ($line in @(netsh wlan show interfaces)) {
+  if ($line -match '^\\s*SSID\\s*:\\s*(.+)$' -and $line -notmatch 'BSSID') {
+    $connected = $Matches[1].Trim()
+    break
+  }
+}
+
+$profiles = @()
+foreach ($line in @(netsh wlan show profiles)) {
+  if ($line -match ':\\s*(.+)$') { $profiles += $Matches[1].Trim() }
+}
+
+$items = @()
+$current = $null
+foreach ($line in @(netsh wlan show networks mode=bssid)) {
+  if ($line -match '^\\s*SSID\\s+\\d+\\s*:\\s*(.*)$') {
+    if ($current -and $current.name) { $items += [PSCustomObject]$current }
+    $current = [ordered]@{
+      name = $Matches[1].Trim()
+      strength = 1
+      secured = $true
+      connected = $false
+      saved = $false
+    }
+  } elseif ($current -and $line -match '^\\s*Authentication\\s*:\\s*(.+)$') {
+    $current.secured = ($Matches[1].Trim() -notmatch 'Open')
+  } elseif ($current -and $line -match '^\\s*Signal\\s*:\\s*(\\d+)%') {
+    $pct = [int]$Matches[1]
+    $current.strength = [Math]::Max(1, [Math]::Min(4, [Math]::Ceiling($pct / 25)))
+  }
+}
+if ($current -and $current.name) { $items += [PSCustomObject]$current }
+
+foreach ($item in $items) {
+  $item.connected = ($item.name -eq $connected)
+  $item.saved = ($profiles -contains $item.name)
+}
+
+@($items | Sort-Object -Property connected, strength -Descending | Select-Object -First 12) | ConvertTo-Json -Compress
+`)
+    const parsed = out.trim() ? JSON.parse(out.trim()) : []
+    const networks = Array.isArray(parsed) ? parsed : [parsed]
+    return networks
+      .filter(network => network && network.name)
+      .map((network, idx) => ({
+        id: `${network.name}-${idx}`,
+        name: String(network.name),
+        strength: clamp(Number(network.strength) || 1, 1, 4),
+        secured: !!network.secured,
+        connected: !!network.connected,
+        saved: !!network.saved,
+      }))
+  } catch (e) {
+    console.error('get-wifi-networks error:', e.message)
+    return []
+  }
+}
+
+async function connectWindowsWifiNetwork(ssid) {
+  const networkName = String(ssid || '').trim()
+  if (!networkName) return { ok: false, error: 'Missing Wi-Fi network name' }
+
+  if (process.platform !== 'win32') {
+    return { ok: true, simulated: true, network: networkName }
+  }
+
+  try {
+    await runPowerShell(`
+$ErrorActionPreference = 'Stop'
+$ssid = ${psSingleQuote(networkName)}
+$profiles = @()
+foreach ($line in @(netsh wlan show profiles)) {
+  if ($line -match ':\\s*(.+)$') { $profiles += $Matches[1].Trim() }
+}
+if ($profiles -notcontains $ssid) {
+  throw "Saved profile not found for '$ssid'. Connect once in Windows Wi-Fi settings, then Edge Go can reconnect it."
+}
+netsh wlan connect name="$ssid" | Out-Null
+Start-Sleep -Milliseconds 800
+`)
+    return { ok: true, network: networkName }
+  } catch (e) {
+    console.error('connect-wifi-network error:', e.message)
+    return { ok: false, error: e.message }
+  }
+}
+
 async function setSystemControl(control, value) {
   if (process.platform !== 'win32') {
     systemControlState[control] = value
@@ -486,7 +590,14 @@ async function setSystemControl(control, value) {
   let script = ''
 
   if (control === 'brightness') {
-    script = `(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(1,${numberValue}) | Out-Null`
+    script = `
+$ErrorActionPreference = 'Stop'
+$methods = Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods
+if (-not $methods) { throw 'No controllable laptop brightness interface found' }
+foreach ($method in @($methods)) {
+  $method.WmiSetBrightness(1, ${numberValue}) | Out-Null
+}
+`
   } else if (control === 'dnd') {
     const val = value ? 0 : 1
     script = `Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings' -Name 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value ${val} -Force`
@@ -549,6 +660,10 @@ $null = Await-Async $setStateOp
 }
 
 ipcMain.handle('get-system-state', async () => getWindowsSystemState())
+
+ipcMain.handle('get-wifi-networks', async () => getWindowsWifiNetworks())
+
+ipcMain.handle('connect-wifi-network', async (_, ssid) => connectWindowsWifiNetwork(ssid))
 
 ipcMain.handle('set-system-control', async (_, control, value) => setSystemControl(control, value))
 
@@ -683,7 +798,8 @@ function startWindowsMediaDaemon() {
   lastWinMediaRestartTime = now
 
   if (winMediaRestartCount > 5) {
-    console.warn('Windows media daemon failed repeatedly. Disabling SMTC media queries.')
+    console.warn('Windows media daemon failed repeatedly. Falling back to Spotify window-title polling.')
+    startSpotifyFallbackPoller()
     return
   }
 
@@ -694,7 +810,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 # Load WinRT classes dynamically
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSession, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
-[Windows.Media.Control.GlobalSystemMediaProperties, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
+[Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
 [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
 
 function Await-Async($op) {
@@ -742,8 +858,8 @@ function Get-Sessions {
             $stream = Await-Async $streamOp
             if ($stream) {
               $size = $stream.Size
-              $reader = New-Object Windows.Storage.Streams.DataReader -ArgumentList $stream
-              $loadOp = $reader.LoadAsync($size)
+              $reader = New-Object Windows.Storage.Streams.DataReader -ArgumentList ($stream.GetInputStreamAt(0))
+              $loadOp = $reader.LoadAsync([uint32]$size)
               $loaded = Await-Async $loadOp
               
               $bytes = New-Object Byte[] $size
@@ -764,7 +880,7 @@ function Get-Sessions {
         $h["artist"] = if ($props.Artist) { $props.Artist } else { "" }
         $h["album"] = if ($props.AlbumTitle) { $props.AlbumTitle } else { "" }
         $h["albumArt"] = $albumArtStr
-        $h["isPlaying"] = ($info -and $info.PlaybackStatus -eq 'Playing')
+        $h["isPlaying"] = ($info -and $info.PlaybackStatus.ToString() -eq 'Playing')
         $h["position"] = if ($timeline) { [Math]::Round($timeline.Position.TotalSeconds, 1) } else { 0.0 }
         $h["duration"] = if ($timeline) { [Math]::Round($timeline.EndTime.TotalSeconds, 1) } else { 0.0 }
         $h["source"] = $label
@@ -962,16 +1078,28 @@ namespace EdgeGoAudio {
   }
 
   public static class Volume {
-    public static void Set(float level) {
+    static IAudioEndpointVolume GetEndpoint() {
       var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
       IMMDevice device;
       Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
       Guid iid = typeof(IAudioEndpointVolume).GUID;
       IAudioEndpointVolume endpoint;
       Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+      return endpoint;
+    }
+
+    public static void Set(float level) {
+      IAudioEndpointVolume endpoint = GetEndpoint();
       var eventContext = Guid.Empty;
       Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(level, eventContext));
       Marshal.ThrowExceptionForHR(endpoint.SetMute(level <= 0.001f, eventContext));
+    }
+
+    public static float Get() {
+      IAudioEndpointVolume endpoint = GetEndpoint();
+      float level;
+      Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
+      return level;
     }
   }
 }
@@ -980,6 +1108,84 @@ namespace EdgeGoAudio {
 `
   return runPowerShell(psScript)
 }
+
+async function getWindowsVolume() {
+  if (process.platform !== 'win32') return 50
+  const psScript = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace EdgeGoAudio {
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+  class MMDeviceEnumeratorComObject {}
+
+  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator {
+    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+    int GetDevice(string pwstrId, out IMMDevice ppDevice);
+    int RegisterEndpointNotificationCallback(IntPtr pClient);
+    int UnregisterEndpointNotificationCallback(IntPtr pClient);
+  }
+
+  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
+    int GetId(out IntPtr ppstrId);
+    int GetState(out int pdwState);
+  }
+
+  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out int pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute(bool bMute, Guid pguidEventContext);
+    int GetMute(out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(Guid pguidEventContext);
+    int VolumeStepDown(Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+  }
+
+  public static class Volume {
+    public static float Get() {
+      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+      IMMDevice device;
+      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      IAudioEndpointVolume endpoint;
+      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+      float level;
+      Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
+      return level;
+    }
+  }
+}
+'@
+[math]::Round([EdgeGoAudio.Volume]::Get() * 100)
+`
+  try {
+    const out = await runPowerShell(psScript)
+    return clamp(Number.parseInt(out.trim(), 10) || 0, 0, 100)
+  } catch (e) {
+    console.error('get-volume error:', e.message)
+    return 50
+  }
+}
+
+ipcMain.handle('get-system-volume', async () => getWindowsVolume())
 
 ipcMain.on('media-command', (_, command, value, source) => {
   if (command === 'volume') {

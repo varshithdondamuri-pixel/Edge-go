@@ -196,10 +196,11 @@ export default function App() {
         const current        = sessions.find(s => s.isCurrent)
         const spotify        = sessions.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
         const active         = sessions.find(s => s.isPlaying)
-        setMedia(currentPlaying || spotify || active || current || sessions[0] || INITIAL_MEDIA)
+        const selected = currentPlaying || spotify || active || current || sessions[0] || INITIAL_MEDIA
+        setMedia(prev => ({ ...selected, volume: prev.volume ?? selected.volume ?? 50 }))
       } else {
         setAllSessions([])
-        setMedia(INITIAL_MEDIA)
+        setMedia(prev => ({ ...INITIAL_MEDIA, volume: prev.volume ?? 50 }))
       }
     }
 
@@ -235,6 +236,25 @@ export default function App() {
     settings.youtubeEnabled,
     settings.windowsMediaEnabled,
   ])
+
+  // ── System volume sync ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isElectron || !window.electronAPI.getSystemVolume) return
+    let active = true
+    const fetchVolume = async () => {
+      try {
+        const level = await window.electronAPI.getSystemVolume()
+        if (!active || !Number.isFinite(level)) return
+        setMedia(m => ({ ...m, volume: Math.max(0, Math.min(100, level)) }))
+      } catch {}
+    }
+    fetchVolume()
+    const id = setInterval(fetchVolume, 10000)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [])
 
   // ── Media position smooth ticker ──────────────────────────────────────────
   useEffect(() => {
@@ -288,9 +308,10 @@ export default function App() {
   ).current
 
   const handleVolumeChange = useCallback((level) => {
-    setMedia(m => ({ ...m, volume: level }))
-    showVolumeHUD(level)
-    throttledVolumeIPC(level, media.sourceAppId, media.source)
+    const nextLevel = Math.max(0, Math.min(100, Number(level) || 0))
+    setMedia(m => ({ ...m, volume: nextLevel }))
+    showVolumeHUD(nextLevel)
+    throttledVolumeIPC(nextLevel, media.sourceAppId, media.source)
   }, [showVolumeHUD, media.source, media.sourceAppId, throttledVolumeIPC])
 
   const handleSeek = useCallback((position) => {
@@ -303,16 +324,31 @@ export default function App() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'AudioVolumeUp') {
-        setMedia(m => { const v = Math.min(100, m.volume + 5); showVolumeHUD(v); return { ...m, volume: v } })
+        setMedia(m => {
+          const v = Math.min(100, m.volume + 5)
+          showVolumeHUD(v)
+          throttledVolumeIPC(v, m.sourceAppId, m.source)
+          return { ...m, volume: v }
+        })
       } else if (e.key === 'AudioVolumeDown') {
-        setMedia(m => { const v = Math.max(0, m.volume - 5); showVolumeHUD(v); return { ...m, volume: v } })
+        setMedia(m => {
+          const v = Math.max(0, m.volume - 5)
+          showVolumeHUD(v)
+          throttledVolumeIPC(v, m.sourceAppId, m.source)
+          return { ...m, volume: v }
+        })
       } else if (e.key === 'AudioVolumeMute') {
-        setMedia(m => { const v = m.volume > 0 ? 0 : 50; showVolumeHUD(v); return { ...m, volume: v } })
+        setMedia(m => {
+          const v = m.volume > 0 ? 0 : 50
+          showVolumeHUD(v)
+          throttledVolumeIPC(v, m.sourceAppId, m.source)
+          return { ...m, volume: v }
+        })
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [showVolumeHUD])
+  }, [showVolumeHUD, throttledVolumeIPC])
 
   // ── Control Center / Clipboard window resize ──────────────────────────────
   useEffect(() => {
@@ -375,7 +411,10 @@ export default function App() {
         onPrev={handlePrev}
         onVolumeChange={handleVolumeChange}
         onSeek={handleSeek}
-        onSettingsOpen={() => window.electronAPI?.openSettings('general')}
+        onSettingsOpen={() => {
+          if (window.electronAPI?.openSettings) window.electronAPI.openSettings('general')
+          else window.location.hash = '#settings?tab=general'
+        }}
         onClipboardOpen={() => setClipboardOpen(true)}
         onControlCenterOpen={() => setControlCenterOpen(true)}
       />
@@ -385,7 +424,8 @@ export default function App() {
         open={controlCenterOpen}
         onClose={() => setControlCenterOpen(false)}
         onOpenSettings={(tab) => {
-          window.electronAPI?.openSettings(tab || 'general')
+          if (window.electronAPI?.openSettings) window.electronAPI.openSettings(tab || 'general')
+          else window.location.hash = `#settings?tab=${tab || 'general'}`
           setControlCenterOpen(false)
         }}
         onOpenClipboard={() => {
