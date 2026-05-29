@@ -380,6 +380,9 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
+  if (process.platform !== 'win32') {
+    return { level: 100, charging: false, available: false }
+  }
   try {
     const out = await runPowerShell(`
 $battery = Get-CimInstance Win32_Battery | Select-Object -First 1
@@ -908,6 +911,7 @@ function startSpotifyFallbackPoller() {
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
 function setWindowsVolume(level) {
+  if (process.platform !== 'win32') return Promise.resolve()
   const scalar = clamp(Number(level) || 0, 0, 100) / 100
   const psScript = `
 Add-Type -TypeDefinition @'
