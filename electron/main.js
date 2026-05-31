@@ -39,6 +39,7 @@ let settingsWindow
 let tray
 let winMediaProcess = null
 let lastWindowsMediaData = []
+let lastKnownVolume = 50
 let boundsTimeout = null
 // Tracks the notch's saved position so restores are correct
 const notchState = {
@@ -813,10 +814,130 @@ $ErrorActionPreference = 'SilentlyContinue'
 [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
 [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Concurrent;
+using System.Threading;
+
+namespace EdgeGoAudio {
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+  class MMDeviceEnumeratorComObject {}
+
+  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator {
+    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+    int GetDevice(string pwstrId, out IMMDevice ppDevice);
+    int RegisterEndpointNotificationCallback(IntPtr pClient);
+    int UnregisterEndpointNotificationCallback(IntPtr pClient);
+  }
+
+  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
+    int GetId(out IntPtr ppstrId);
+    int GetState(out int pdwState);
+  }
+
+  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out int pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute(bool bMute, Guid pguidEventContext);
+    int GetMute(out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(Guid pguidEventContext);
+    int VolumeStepDown(Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+  }
+
+  public static class Volume {
+    static IAudioEndpointVolume GetEndpoint() {
+      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+      IMMDevice device;
+      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      IAudioEndpointVolume endpoint;
+      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+      return endpoint;
+    }
+
+    public static void Set(float level) {
+      try {
+        IAudioEndpointVolume endpoint = GetEndpoint();
+        var eventContext = Guid.Empty;
+        Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(level, eventContext));
+        Marshal.ThrowExceptionForHR(endpoint.SetMute(level <= 0.001f, eventContext));
+      } catch {}
+    }
+
+    public static float Get() {
+      try {
+        IAudioEndpointVolume endpoint = GetEndpoint();
+        float level;
+        Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
+        return level;
+      } catch {
+        return 0.5f;
+      }
+    }
+  }
+
+  public static class StdinReader {
+    private static ConcurrentQueue<string> queue = new ConcurrentQueue<string>();
+    private static bool running = false;
+
+    public static void Start() {
+      if (running) return;
+      running = true;
+      Thread t = new Thread(() => {
+        while (running) {
+          try {
+            string line = Console.ReadLine();
+            if (line == null) break;
+            queue.Enqueue(line);
+          } catch {
+            Thread.Sleep(100);
+          }
+        }
+      });
+      t.IsBackground = true;
+      t.Start();
+    }
+
+    public static string GetNextCommand() {
+      string cmd;
+      if (queue.TryDequeue(out cmd)) {
+        return cmd;
+      }
+      return null;
+    }
+
+    public static void Stop() {
+      running = false;
+    }
+  }
+}
+'@
+
 function Await-Async($op) {
   while ($op.Status -eq 'Started' -or $op.Status -eq 0) { [System.Threading.Thread]::Sleep(10) }
   return $op.GetResults()
 }
+
+[EdgeGoAudio.StdinReader]::Start()
 
 function Get-Sessions {
   $results = @()
@@ -875,6 +996,8 @@ function Get-Sessions {
           } catch {}
         }
 
+        $vol = [math]::Round([EdgeGoAudio.Volume]::Get() * 100)
+
         $h = @{}
         $h["title"] = if ($props.Title) { $props.Title } else { "Unknown" }
         $h["artist"] = if ($props.Artist) { $props.Artist } else { "" }
@@ -886,6 +1009,7 @@ function Get-Sessions {
         $h["source"] = $label
         $h["sourceAppId"] = if ($src) { $src } else { "" }
         $h["isCurrent"] = ($src -eq $currentId)
+        $h["volume"] = $vol
 
         $results += $h
       } catch {}
@@ -894,7 +1018,6 @@ function Get-Sessions {
   return $results
 }
 
-# ── Spotify window-title fallback ──────────────────────────────────────────
 function Get-SpotifyTitle {
   $proc = Get-Process Spotify -ErrorAction SilentlyContinue |
           Where-Object { $_.MainWindowTitle -and
@@ -903,14 +1026,14 @@ function Get-SpotifyTitle {
   if (-not $proc) { return $null }
   $t = $proc.MainWindowTitle
   if ($t -match '^(.+?) - (.+)$') {
+    $vol = [math]::Round([EdgeGoAudio.Volume]::Get() * 100)
     return @{ title=$Matches[2].Trim(); artist=$Matches[1].Trim(); album='';
               albumArt=''; isPlaying=$true; position=0; duration=0;
-              source='Spotify'; sourceAppId='com.spotify.client'; isCurrent=$true }
+              source='Spotify'; sourceAppId='com.spotify.client'; isCurrent=$true; volume=$vol }
   }
   return $null
 }
 
-# ── Serialise hashtable → JSON ─────────────────────────────────────────────
 function To-Json($h) {
   $f = @()
   foreach ($k in $h.Keys) {
@@ -923,21 +1046,99 @@ function To-Json($h) {
   '{' + ($f -join ',') + '}'
 }
 
-# ── Main poll loop ──────────────────────────────────────────────────────────
-while ($true) {
-  $out = '[]'
+function Invoke-SessionCommand($command, $value, $source) {
   try {
-    $list = Get-Sessions
-    if ($list -and $list.Count -gt 0) {
-      $parts = foreach ($s in $list) { To-Json $s }
-      $out = '[' + ($parts -join ',') + ']'
-    } else {
-      $sp = Get-SpotifyTitle
-      if ($sp) { $out = '[' + (To-Json $sp) + ']' }
+    $mgrOp = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
+    $manager = Await-Async $mgrOp
+    if (-not $manager) { return $false }
+
+    $sessions = $manager.GetSessions()
+    $target = if ($source) { $source.ToLower() } else { "" }
+    $matched = $false
+
+    $targetSession = $null
+    foreach ($s in $sessions) {
+      $id = ([string]$s.SourceAppUserModelId).ToLowerInvariant()
+      if ($target -and $id.Contains($target)) {
+        $targetSession = $s
+        break
+      }
     }
-  } catch { Write-Error "POLL_ERR:$($_.Exception.Message)" }
-  Write-Output "MEDIA_JSON:$out"
-  Start-Sleep -Milliseconds 1500
+    if (-not $targetSession) {
+      $targetSession = $manager.GetCurrentSession()
+    }
+    if (-not $targetSession -and $sessions.Count -gt 0) {
+      $targetSession = $sessions[0]
+    }
+
+    if (-not $targetSession) { return $false }
+
+    if ($command -eq 'playpause') {
+      $null = Await-Async ($targetSession.TryTogglePlayPauseAsync())
+    } elseif ($command -eq 'next') {
+      $null = Await-Async ($targetSession.TrySkipNextAsync())
+    } elseif ($command -eq 'prev') {
+      $null = Await-Async ($targetSession.TrySkipPreviousAsync())
+    } elseif ($command -eq 'seek') {
+      $seekSec = 0.0
+      if ([double]::TryParse($value, [ref]$seekSec)) {
+        $seekTicks = [Math]::Round($seekSec * 10000000)
+        $null = Await-Async ($targetSession.TryChangePlaybackPositionAsync($seekTicks))
+      }
+    }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+$lastVolume = -1
+$tick = 0
+
+while ($true) {
+  # 1. Check stdin commands
+  $cmd = [EdgeGoAudio.StdinReader]::GetNextCommand()
+  while ($cmd -ne $null) {
+    if ($cmd -match '^VOLUME:(.+)$') {
+      $volVal = [float]$Matches[1]
+      [EdgeGoAudio.Volume]::Set($volVal)
+    } elseif ($cmd -match '^MEDIA:(.+?):(.*?):(.*)$') {
+      $mediaCmd = $Matches[1]
+      $mediaVal = $Matches[2]
+      $mediaSrc = $Matches[3]
+      $null = Invoke-SessionCommand $mediaCmd $mediaVal $mediaSrc
+    }
+    $cmd = [EdgeGoAudio.StdinReader]::GetNextCommand()
+  }
+
+  # 2. Monitor and report volume changes
+  try {
+    $currentVol = [math]::Round([EdgeGoAudio.Volume]::Get() * 100)
+    if ($currentVol -ne $lastVolume) {
+      $lastVolume = $currentVol
+      Write-Output "VOLUME_CHANGE:$currentVol"
+    }
+  } catch {}
+
+  # 3. Periodically output media sessions
+  if ($tick -eq 0 -or $tick -ge 15) {
+    $tick = 0
+    $out = '[]'
+    try {
+      $list = Get-Sessions
+      if ($list -and $list.Count -gt 0) {
+        $parts = foreach ($s in $list) { To-Json $s }
+        $out = '[' + ($parts -join ',') + ']'
+      } else {
+        $sp = Get-SpotifyTitle
+        if ($sp) { $out = '[' + (To-Json $sp) + ']' }
+      }
+    } catch {}
+    Write-Output "MEDIA_JSON:$out"
+  }
+
+  $tick++
+  Start-Sleep -Milliseconds 100
 }
 `
 
@@ -958,25 +1159,38 @@ while ($true) {
     buffer = lines.pop()
     for (const line of lines) {
       const trimmed = line.trim()
-      if (!trimmed.startsWith('MEDIA_JSON:')) continue
-      try {
-        const parsed = JSON.parse(trimmed.slice('MEDIA_JSON:'.length))
-        const sessions = Array.isArray(parsed) ? parsed.map(s => ({
-          title:       s.title       || 'Unknown Title',
-          artist:      s.artist      || '',
-          album:       s.album       || '',
-          albumArt:    s.albumArt    || null,
-          duration:    Number(s.duration)  || 0,
-          position:    Number(s.position)  || 0,
-          isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
-          volume:      50,
-          source:      s.source      || 'Media',
-          sourceAppId: s.sourceAppId || '',
-          isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
-        })) : []
-        pushMediaUpdate(sessions)
-      } catch (e) {
-        console.error('[SMTC] JSON parse error:', e.message)
+      if (trimmed.startsWith('VOLUME_CHANGE:')) {
+        const vol = Number(trimmed.slice('VOLUME_CHANGE:'.length))
+        if (!isNaN(vol)) {
+          lastKnownVolume = vol
+          BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+              win.webContents.send('volume-updated', vol)
+            }
+          })
+        }
+        continue
+      }
+      if (trimmed.startsWith('MEDIA_JSON:')) {
+        try {
+          const parsed = JSON.parse(trimmed.slice('MEDIA_JSON:'.length))
+          const sessions = Array.isArray(parsed) ? parsed.map(s => ({
+            title:       s.title       || 'Unknown Title',
+            artist:      s.artist      || '',
+            album:       s.album       || '',
+            albumArt:    s.albumArt    || null,
+            duration:    Number(s.duration)  || 0,
+            position:    Number(s.position)  || 0,
+            isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
+            volume:      Number(s.volume)    || lastKnownVolume,
+            source:      s.source      || 'Media',
+            sourceAppId: s.sourceAppId || '',
+            isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
+          })) : []
+          pushMediaUpdate(sessions)
+        } catch (e) {
+          console.error('[SMTC] JSON parse error:', e.message)
+        }
       }
     }
   })
@@ -993,6 +1207,7 @@ while ($true) {
     }
   })
 }
+
 
 // ─── Spotify window-title fallback poller (Node-side, no PowerShell) ─────────
 // Activated only if the SMTC daemon fails > 5 times. Reads Spotify's window
@@ -1026,259 +1241,40 @@ function startSpotifyFallbackPoller() {
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
+function sendDaemonCommand(cmd) {
+  if (winMediaProcess && winMediaProcess.stdin && !winMediaProcess.stdin.destroyed) {
+    try {
+      winMediaProcess.stdin.write(cmd + '\n')
+    } catch (e) {
+      console.error('[SMTC] Stdin write error:', e.message)
+    }
+  }
+}
+
 function setWindowsVolume(level) {
   if (process.platform !== 'win32') return Promise.resolve()
-  const scalar = clamp(Number(level) || 0, 0, 100) / 100
-  const psScript = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-namespace EdgeGoAudio {
-  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-  class MMDeviceEnumeratorComObject {}
-
-  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDeviceEnumerator {
-    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
-    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
-    int GetDevice(string pwstrId, out IMMDevice ppDevice);
-    int RegisterEndpointNotificationCallback(IntPtr pClient);
-    int UnregisterEndpointNotificationCallback(IntPtr pClient);
-  }
-
-  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDevice {
-    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
-    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
-    int GetId(out IntPtr ppstrId);
-    int GetState(out int pdwState);
-  }
-
-  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioEndpointVolume {
-    int RegisterControlChangeNotify(IntPtr pNotify);
-    int UnregisterControlChangeNotify(IntPtr pNotify);
-    int GetChannelCount(out int pnChannelCount);
-    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
-    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
-    int GetMasterVolumeLevel(out float pfLevelDB);
-    int GetMasterVolumeLevelScalar(out float pfLevel);
-    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
-    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
-    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
-    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
-    int SetMute(bool bMute, Guid pguidEventContext);
-    int GetMute(out bool pbMute);
-    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
-    int VolumeStepUp(Guid pguidEventContext);
-    int VolumeStepDown(Guid pguidEventContext);
-    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
-    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
-  }
-
-  public static class Volume {
-    static IAudioEndpointVolume GetEndpoint() {
-      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-      IMMDevice device;
-      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
-      Guid iid = typeof(IAudioEndpointVolume).GUID;
-      IAudioEndpointVolume endpoint;
-      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
-      return endpoint;
-    }
-
-    public static void Set(float level) {
-      IAudioEndpointVolume endpoint = GetEndpoint();
-      var eventContext = Guid.Empty;
-      Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(level, eventContext));
-      Marshal.ThrowExceptionForHR(endpoint.SetMute(level <= 0.001f, eventContext));
-    }
-
-    public static float Get() {
-      IAudioEndpointVolume endpoint = GetEndpoint();
-      float level;
-      Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
-      return level;
-    }
-  }
-}
-'@
-[EdgeGoAudio.Volume]::Set(${scalar})
-`
-  return runPowerShell(psScript)
+  const nextLevel = clamp(Number(level) || 0, 0, 100)
+  lastKnownVolume = nextLevel
+  const scalar = nextLevel / 100
+  sendDaemonCommand(`VOLUME:${scalar}`)
+  return Promise.resolve()
 }
 
-async function getWindowsVolume() {
-  if (process.platform !== 'win32') return 50
-  const psScript = `
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-namespace EdgeGoAudio {
-  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-  class MMDeviceEnumeratorComObject {}
-
-  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDeviceEnumerator {
-    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
-    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
-    int GetDevice(string pwstrId, out IMMDevice ppDevice);
-    int RegisterEndpointNotificationCallback(IntPtr pClient);
-    int UnregisterEndpointNotificationCallback(IntPtr pClient);
-  }
-
-  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IMMDevice {
-    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
-    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
-    int GetId(out IntPtr ppstrId);
-    int GetState(out int pdwState);
-  }
-
-  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-  interface IAudioEndpointVolume {
-    int RegisterControlChangeNotify(IntPtr pNotify);
-    int UnregisterControlChangeNotify(IntPtr pNotify);
-    int GetChannelCount(out int pnChannelCount);
-    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
-    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
-    int GetMasterVolumeLevel(out float pfLevelDB);
-    int GetMasterVolumeLevelScalar(out float pfLevel);
-    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
-    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
-    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
-    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
-    int SetMute(bool bMute, Guid pguidEventContext);
-    int GetMute(out bool pbMute);
-    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
-    int VolumeStepUp(Guid pguidEventContext);
-    int VolumeStepDown(Guid pguidEventContext);
-    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
-    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
-  }
-
-  public static class Volume {
-    public static float Get() {
-      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-      IMMDevice device;
-      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
-      Guid iid = typeof(IAudioEndpointVolume).GUID;
-      IAudioEndpointVolume endpoint;
-      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
-      float level;
-      Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
-      return level;
-    }
-  }
-}
-'@
-[math]::Round([EdgeGoAudio.Volume]::Get() * 100)
-`
-  try {
-    const out = await runPowerShell(psScript)
-    return clamp(Number.parseInt(out.trim(), 10) || 0, 0, 100)
-  } catch (e) {
-    console.error('get-volume error:', e.message)
-    return 50
-  }
+function getWindowsVolume() {
+  return lastKnownVolume
 }
 
 ipcMain.handle('get-system-volume', async () => getWindowsVolume())
 
 ipcMain.on('media-command', (_, command, value, source) => {
   if (command === 'volume') {
-    setWindowsVolume(value).catch(e => {
-      console.error('volume-command error:', e.message)
-    })
+    setWindowsVolume(value)
     return
   }
 
-  let method = ''
-  if (command === 'playpause') method = 'TryTogglePlayPauseAsync'
-  else if (command === 'next')  method = 'TrySkipNextAsync'
-  else if (command === 'prev')  method = 'TrySkipPreviousAsync'
-  else if (command === 'seek')  method = 'TryChangePlaybackPositionAsync'
-
-  if (!method) return
-
-  const safeSource = (source || '').replace(/'/g, "''")
-  const seekTicks = command === 'seek'
-    ? Math.round(clamp(Number(value) || 0, 0, 86400) * 10000000)
-    : 0
-  const action = command === 'seek'
-    ? `$null = Await-Async ($session.TryChangePlaybackPositionAsync(${seekTicks}))`
-    : `$null = Await-Async ($session.${method}())`
-  const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-[Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
-[Windows.Media.Control.GlobalSystemMediaTransportControlsSession, Windows.Media.Control, ContentType=WindowsRuntime] | Out-Null
-
-function Await-Async($op) {
-  while ($op.Status -eq 'Started' -or $op.Status -eq 0) { [System.Threading.Thread]::Sleep(10) }
-  return $op.GetResults()
-}
-
-function Get-FriendlySource($id) {
-  switch -Wildcard ($id.ToLowerInvariant()) {
-    '*spotify*'       { return 'Spotify' }
-    '*chrome*'        { return 'Chrome' }
-    '*msedge*'        { return 'Edge' }
-    '*firefox*'       { return 'Firefox' }
-    '*vlc*'           { return 'VLC' }
-    '*zune*'          { return 'Groove Music' }
-    '*groove*'        { return 'Groove Music' }
-    '*wmplayer*'      { return 'Windows Media Player' }
-    '*media.player*'  { return 'Windows Media' }
-    '*music*'         { return 'Windows Media' }
-    default           { return $id }
-  }
-}
-function Invoke-EdgeGoMediaCommand($session) {
-  if (-not $session) { return $false }
-  try {
-    ${action}
-    return $true
-  } catch {
-    return $false
-  }
-}
-$mgrOp = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
-$smgr = Await-Async $mgrOp
-if (-not $smgr) { exit }
-
-$sessions = $smgr.GetSessions()
-$target = '${safeSource}'.ToLower()
-$matched = $false
-foreach ($s in $sessions) {
-  $id = ([string]$s.SourceAppUserModelId).ToLowerInvariant()
-  $label = (Get-FriendlySource $id).ToLowerInvariant()
-  if ($target -and ($id.Contains($target) -or $label.Contains($target))) {
-    $matched = Invoke-EdgeGoMediaCommand $s
-    if ($matched) {
-      break
-    }
-  }
-}
-if (-not $matched) {
-  $cur = $smgr.GetCurrentSession()
-  if ($cur) {
-    $matched = Invoke-EdgeGoMediaCommand $cur
-  }
-}
-if (-not $matched) {
-  foreach ($s in $sessions) {
-    if (Invoke-EdgeGoMediaCommand $s) {
-      $matched = $true
-      break
-    }
-  }
-}
-`
-  runPowerShell(psScript).catch(e => {
-    console.error('media-command error:', e.message)
-  })
+  const nextVal = value !== null && value !== undefined ? String(value) : ''
+  const nextSrc = source !== null && source !== undefined ? String(source) : ''
+  sendDaemonCommand(`MEDIA:${command}:${nextVal}:${nextSrc}`)
 })
 
 // ─── IPC: Settings sync ──────────────────────────────────────────────────────

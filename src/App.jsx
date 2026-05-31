@@ -239,20 +239,25 @@ export default function App() {
 
   // ── System volume sync ───────────────────────────────────────────────────
   useEffect(() => {
-    if (!isElectron || !window.electronAPI.getSystemVolume) return
-    let active = true
-    const fetchVolume = async () => {
-      try {
-        const level = await window.electronAPI.getSystemVolume()
-        if (!active || !Number.isFinite(level)) return
-        setMedia(m => ({ ...m, volume: Math.max(0, Math.min(100, level)) }))
-      } catch {}
+    if (!isElectron) return
+
+    // Fetch initial volume
+    if (window.electronAPI.getSystemVolume) {
+      window.electronAPI.getSystemVolume().then(level => {
+        if (Number.isFinite(level)) {
+          setMedia(m => ({ ...m, volume: Math.max(0, Math.min(100, level)) }))
+        }
+      }).catch(() => {})
     }
-    fetchVolume()
-    const id = setInterval(fetchVolume, 10000)
-    return () => {
-      active = false
-      clearInterval(id)
+
+    // Subscribe to real-time volume updates
+    if (window.electronAPI.onVolumeUpdated) {
+      const unsub = window.electronAPI.onVolumeUpdated((level) => {
+        if (Number.isFinite(level)) {
+          setMedia(m => ({ ...m, volume: Math.max(0, Math.min(100, level)) }))
+        }
+      })
+      return unsub
     }
   }, [])
 

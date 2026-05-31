@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('media-update', handler)
     return () => ipcRenderer.removeListener('media-update', handler)
   },
+  onVolumeUpdated: (cb) => {
+    const handler = (_event, vol) => cb(vol)
+    ipcRenderer.on('volume-updated', handler)
+    return () => ipcRenderer.removeListener('volume-updated', handler)
+  },
   onOpenControlCenter: (cb) => {
     const handler = () => cb()
     ipcRenderer.on('open-control-center', handler)
