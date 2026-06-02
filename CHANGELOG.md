@@ -2,6 +2,17 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.6.1] - 2026-06-02
+
+### Added
+- **Non-Windows Warning**: Added a runtime warning log when starting on non-Windows platforms.
+
+### Fixed
+- **Media Polling & Caching**: Added caching for WinRT SMTC session manager and album art base64 strings to reduce CPU/memory overhead.
+- **Robust JSON & Number Parsing**: Upgraded PowerShell JSON converter and media seek parsing to be invariant-culture aware, preventing failures on non-US localized Windows setups.
+- **Debounced Media Output**: Reduced stdout chatter by only outputting media updates when the playing state, track title, or volume changes.
+- **Safety Check in MusicPlayer**: Guarded `formatTime` helper against `NaN` or non-number inputs to prevent UI rendering crashes.
+
 ## [1.6.0] - 2026-05-29
 
 ### Added

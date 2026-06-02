@@ -1,3 +1,9 @@
+// ============================================================================
+// NOTE: Edge Go is designed, optimized, and built exclusively for Windows.
+// All macOS-specific code (like AppleScript or mock controls) is purely for
+// local development/testing purposes and is not supported in production.
+// ============================================================================
+
 const {
   app,
   BrowserWindow,
@@ -685,104 +691,7 @@ function pushMediaUpdate(data) {
   }
 }
 
-// ─── macOS media bridge (osascript) ─────────────────────────────────────────
 
-let macMediaTimer = null
-let lastMacMediaJson = ''
-
-function startMacMediaDaemon() {
-  if (process.platform !== 'darwin') return
-
-  const script = `
-tell application "System Events"
-  set runningApps to (name of every application process)
-end tell
-
-set mediaList to {}
-
--- Spotify
-if "Spotify" is in runningApps then
-  try
-    tell application "Spotify"
-      if player state is not stopped then
-        set trackName to name of current track
-        set artistName to artist of current track
-        set albumName to album of current track
-        set trackDuration to (duration of current track) / 1000
-        set trackPosition to player position
-        set isPlayingNow to (player state is playing)
-        set mediaList to mediaList & {{title:trackName, artist:artistName, album:albumName, source:"Spotify", sourceAppId:"com.spotify.client", isPlaying:isPlayingNow, duration:trackDuration, position:trackPosition, isCurrent:true}}
-      end if
-    end tell
-  end try
-end if
-
--- Music.app / Apple Music
-if "Music" is in runningApps then
-  try
-    tell application "Music"
-      if player state is not stopped then
-        set trackName to name of current track
-        set artistName to artist of current track
-        set albumName to album of current track
-        set trackDuration to duration of current track
-        set trackPosition to player position
-        set isPlayingNow to (player state is playing)
-        set mediaList to mediaList & {{title:trackName, artist:artistName, album:albumName, source:"Apple Music", sourceAppId:"com.apple.Music", isPlaying:isPlayingNow, duration:trackDuration, position:trackPosition, isCurrent:(length of mediaList = 0)}}
-      end if
-    end tell
-  end try
-end if
-
-set jsonOut to "["
-repeat with i from 1 to length of mediaList
-  set m to item i of mediaList
-  set isLast to (i = length of mediaList)
-  set jsonOut to jsonOut & "{\"title\":\"" & title of m & "\",\"artist\":\"" & artist of m & "\",\"album\":\"" & album of m & "\",\"source\":\"" & source of m & "\",\"sourceAppId\":\"" & sourceAppId of m & "\",\"isPlaying\":" & isPlaying of m & ",\"duration\":" & duration of m & ",\"position\":" & position of m & ",\"isCurrent\":" & isCurrent of m & "}"
-  if not isLast then set jsonOut to jsonOut & ","
-end repeat
-set jsonOut to jsonOut & "]"
-return jsonOut
-`
-
-  const poll = () => {
-    exec(`osascript -e '${script.replace(/'/g, "'\''")}'`, { timeout: 4000 }, (err, stdout) => {
-      if (err) {
-        // osascript failed — no media apps open, push empty
-        if (lastMacMediaJson !== '[]') {
-          lastMacMediaJson = '[]'
-          pushMediaUpdate([])
-        }
-        return
-      }
-      const raw = (stdout || '').trim()
-      if (!raw || raw === lastMacMediaJson) return
-      lastMacMediaJson = raw
-      try {
-        const parsed = JSON.parse(raw)
-        const sessions = Array.isArray(parsed) ? parsed.map(s => ({
-          title: s.title || 'Unknown',
-          artist: s.artist || '',
-          album: s.album || '',
-          albumArt: null,
-          duration: Number(s.duration) || 0,
-          position: Number(s.position) || 0,
-          isPlaying: s.isPlaying === true || s.isPlaying === 'true',
-          volume: 50,
-          source: s.source || 'Media',
-          sourceAppId: s.sourceAppId || '',
-          isCurrent: s.isCurrent === true || s.isCurrent === 'true',
-        })) : []
-        pushMediaUpdate(sessions)
-      } catch (e) {
-        console.warn('[Mac media] JSON parse error:', e.message, '| raw:', raw)
-      }
-    })
-  }
-
-  poll()
-  macMediaTimer = setInterval(poll, 2000)
-}
 
 let winMediaRestartCount = 0
 let lastWinMediaRestartTime = 0
@@ -937,13 +846,25 @@ function Await-Async($op) {
   return $op.GetResults()
 }
 
+$global:sessionManager = $null
+$global:albumArtCache = @{}
+
+function Get-SessionManager {
+  if ($null -eq $global:sessionManager) {
+    try {
+      $mgrOp = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
+      $global:sessionManager = Await-Async $mgrOp
+    } catch {}
+  }
+  return $global:sessionManager
+}
+
 [EdgeGoAudio.StdinReader]::Start()
 
 function Get-Sessions {
   $results = @()
   try {
-    $mgrOp = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
-    $manager = Await-Async $mgrOp
+    $manager = Get-SessionManager
     if (-not $manager) { return $results }
 
     $sessions = $manager.GetSessions()
@@ -974,26 +895,36 @@ function Get-Sessions {
 
         $albumArtStr = $null
         if ($src -eq $currentId -and $props.Thumbnail) {
-          try {
-            $streamOp = $props.Thumbnail.OpenReadAsync()
-            $stream = Await-Async $streamOp
-            if ($stream) {
-              $size = $stream.Size
-              $reader = New-Object Windows.Storage.Streams.DataReader -ArgumentList ($stream.GetInputStreamAt(0))
-              $loadOp = $reader.LoadAsync([uint32]$size)
-              $loaded = Await-Async $loadOp
-              
-              $bytes = New-Object Byte[] $size
-              $reader.ReadBytes($bytes)
-              $base64 = [Convert]::ToBase64String($bytes)
-              $contentType = $stream.ContentType
-              if (-not $contentType) { $contentType = "image/jpeg" }
-              $albumArtStr = "data:$contentType;base64,$base64"
-              
-              $reader.Dispose()
-              $stream.Dispose()
-            }
-          } catch {}
+          $cacheKey = "$src|$($props.Title)|$($props.Artist)"
+          if ($global:albumArtCache.ContainsKey($cacheKey)) {
+            $albumArtStr = $global:albumArtCache[$cacheKey]
+          } else {
+            try {
+              $streamOp = $props.Thumbnail.OpenReadAsync()
+              $stream = Await-Async $streamOp
+              if ($stream) {
+                $size = $stream.Size
+                $reader = New-Object Windows.Storage.Streams.DataReader -ArgumentList ($stream.GetInputStreamAt(0))
+                $loadOp = $reader.LoadAsync([uint32]$size)
+                $loaded = Await-Async $loadOp
+                
+                $bytes = New-Object Byte[] $size
+                $reader.ReadBytes($bytes)
+                $base64 = [Convert]::ToBase64String($bytes)
+                $contentType = $stream.ContentType
+                if (-not $contentType) { $contentType = "image/jpeg" }
+                $albumArtStr = "data:$contentType;base64,$base64"
+                
+                $reader.Dispose()
+                $stream.Dispose()
+                
+                if ($global:albumArtCache.Count -gt 10) {
+                  $global:albumArtCache.Clear()
+                }
+                $global:albumArtCache[$cacheKey] = $albumArtStr
+              }
+            } catch {}
+          }
         }
 
         $vol = [math]::Round([EdgeGoAudio.Volume]::Get() * 100)
@@ -1038,18 +969,26 @@ function To-Json($h) {
   $f = @()
   foreach ($k in $h.Keys) {
     $v = $h[$k]
-    if ($v -is [bool])   { $f += '"'+$k+'":'+$v.ToString().ToLower() }
-    elseif ($v -is [System.ValueType]) { $f += '"'+$k+'":'+$v }
-    else { $e = ([string]$v) -replace '\\\\','\\\\' -replace '"','\\"' -replace "[\\r\\n]",' '
-           $f += '"'+$k+'":"'+$e+'"' }
+    if ($v -eq $null) {
+      $f += '"'+$k+'":null'
+    } elseif ($v -is [bool]) {
+      $f += '"'+$k+'":'+$v.ToString().ToLower()
+    } elseif ($v -is [int] -or $v -is [long]) {
+      $f += '"'+$k+'":'+$v
+    } elseif ($v -is [float] -or $v -is [double] -or $v -is [decimal]) {
+      $str = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:F2}", $v)
+      $f += '"'+$k+'":'+$str
+    } else {
+      $e = ([string]$v) -replace '\\\\','\\\\' -replace '"','\\"' -replace "[\\r\\n]",' '
+      $f += '"'+$k+'":"'+$e+'"'
+    }
   }
   '{' + ($f -join ',') + '}'
 }
 
 function Invoke-SessionCommand($command, $value, $source) {
   try {
-    $mgrOp = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
-    $manager = Await-Async $mgrOp
+    $manager = Get-SessionManager
     if (-not $manager) { return $false }
 
     $sessions = $manager.GetSessions()
@@ -1081,7 +1020,7 @@ function Invoke-SessionCommand($command, $value, $source) {
       $null = Await-Async ($targetSession.TrySkipPreviousAsync())
     } elseif ($command -eq 'seek') {
       $seekSec = 0.0
-      if ([double]::TryParse($value, [ref]$seekSec)) {
+      if ([double]::TryParse($value, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$seekSec)) {
         $seekTicks = [Math]::Round($seekSec * 10000000)
         $null = Await-Async ($targetSession.TryChangePlaybackPositionAsync($seekTicks))
       }
@@ -1093,20 +1032,24 @@ function Invoke-SessionCommand($command, $value, $source) {
 }
 
 $lastVolume = -1
+$lastFingerprint = ""
 $tick = 0
 
 while ($true) {
+  $forceMediaUpdate = $false
+
   # 1. Check stdin commands
   $cmd = [EdgeGoAudio.StdinReader]::GetNextCommand()
   while ($cmd -ne $null) {
     if ($cmd -match '^VOLUME:(.+)$') {
-      $volVal = [float]$Matches[1]
+      $volVal = [float]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
       [EdgeGoAudio.Volume]::Set($volVal)
     } elseif ($cmd -match '^MEDIA:(.+?):(.*?):(.*)$') {
       $mediaCmd = $Matches[1]
       $mediaVal = $Matches[2]
       $mediaSrc = $Matches[3]
       $null = Invoke-SessionCommand $mediaCmd $mediaVal $mediaSrc
+      $forceMediaUpdate = $true
     }
     $cmd = [EdgeGoAudio.StdinReader]::GetNextCommand()
   }
@@ -1120,21 +1063,39 @@ while ($true) {
     }
   } catch {}
 
-  # 3. Periodically output media sessions
-  if ($tick -eq 0 -or $tick -ge 15) {
-    $tick = 0
+  # 3. Periodically or on-demand output media sessions
+  if ($forceMediaUpdate -or ($tick % 2 -eq 0) -or $tick -eq 0 -or $tick -ge 15) {
+    $currentFingerprint = ""
     $out = '[]'
     try {
       $list = Get-Sessions
       if ($list -and $list.Count -gt 0) {
-        $parts = foreach ($s in $list) { To-Json $s }
+        $parts = @()
+        $fpParts = @()
+        foreach ($s in $list) {
+          $parts += To-Json $s
+          $fpParts += "$($s['sourceAppId'])|$($s['title'])|$($s['artist'])|$($s['isPlaying'])"
+        }
         $out = '[' + ($parts -join ',') + ']'
+        $currentFingerprint = $fpParts -join ';'
       } else {
         $sp = Get-SpotifyTitle
-        if ($sp) { $out = '[' + (To-Json $sp) + ']' }
+        if ($sp) {
+          $out = '[' + (To-Json $sp) + ']'
+          $currentFingerprint = "$($sp['sourceAppId'])|$($sp['title'])|$($sp['artist'])|$($sp['isPlaying'])"
+        }
       }
     } catch {}
-    Write-Output "MEDIA_JSON:$out"
+
+    $fingerprintChanged = ($currentFingerprint -ne $lastFingerprint)
+    if ($fingerprintChanged) {
+      $lastFingerprint = $currentFingerprint
+    }
+
+    if ($tick -eq 0 -or $tick -ge 15 -or $forceMediaUpdate -or $fingerprintChanged) {
+      $tick = 0
+      Write-Output "MEDIA_JSON:$out"
+    }
   }
 
   $tick++
@@ -1407,8 +1368,14 @@ ipcMain.on('open-devtools', (event) => {
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  if (process.platform !== 'win32') {
+    console.warn('====================================================================');
+    console.warn('WARNING: Edge Go is designed and built exclusively for Windows.');
+    console.warn('Running on non-Windows platforms is for UI development/testing only.');
+    console.warn('====================================================================');
+  }
+
   startWindowsMediaDaemon()   // no-op on non-Windows
-  startMacMediaDaemon()       // no-op on non-macOS
   createWindow()
 
   try {
