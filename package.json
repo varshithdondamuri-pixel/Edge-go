@@ -5,6 +5,7 @@
   "main": "electron/main.js",
   "homepage": "./",
   "scripts": {
+    "predev": "npx kill-port 5173",
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "preview": "vite preview",

@@ -21,6 +21,11 @@ const { exec } = require('child_process')
 
 const isDev = !app.isPackaged
 
+// Set Application User Model ID for Windows shortcuts, notifications, and SMTC registration
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.edgego.app')
+}
+
 // ─── Single instance lock ────────────────────────────────────────────────────
 // Ensures only one copy of Edge Go runs at a time.
 // The installer uses this to detect and gracefully close the running instance.
@@ -1014,9 +1019,13 @@ function Invoke-SessionCommand($command, $value, $source) {
 
     if ($command -eq 'playpause') {
       $null = Await-Async ($targetSession.TryTogglePlayPauseAsync())
+    } elseif ($command -eq 'play') {
+      $null = Await-Async ($targetSession.TryPlayAsync())
+    } elseif ($command -eq 'pause') {
+      $null = Await-Async ($targetSession.TryPauseAsync())
     } elseif ($command -eq 'next') {
       $null = Await-Async ($targetSession.TrySkipNextAsync())
-    } elseif ($command -eq 'prev') {
+    } elseif ($command -eq 'prev' -or $command -eq 'previous') {
       $null = Await-Async ($targetSession.TrySkipPreviousAsync())
     } elseif ($command -eq 'seek') {
       $seekSec = 0.0

@@ -56,6 +56,7 @@ export default function ControlCenter({
   const [showNetworks, setShowNetworks] = useState(false)
   const [wifiNetworks, setWifiNetworks] = useState(FALLBACK_WIFI_NETWORKS)
   const [connectedNetwork, setConnectedNetwork] = useState(FALLBACK_WIFI_NETWORKS[0])
+  const [wifiError, setWifiError] = useState(null)
   const [focusMode, setFocusMode] = useState('off') // off | work | personal | sleep
   const [pendingControls, setPendingControls] = useState({})
   const [connectingNetworkId, setConnectingNetworkId] = useState(null)
@@ -99,6 +100,7 @@ export default function ControlCenter({
   // Sync with system state on open
   useEffect(() => {
     if (!open) return
+    setWifiError(null)
 
     const syncSystemState = async () => {
       if (window.electronAPI?.getSystemState) {
@@ -154,6 +156,7 @@ export default function ControlCenter({
     if (isPending('wifi') || isPending('airplaneMode')) return
     const next = !wifi
     if (!next) setShowNetworks(false)
+    setWifiError(null)
     setWifi(next)
     applySystemControl('wifi', next, () => setWifi(!next))
   }
@@ -221,33 +224,36 @@ export default function ControlCenter({
   const selectNetwork = async (network) => {
     if (!wifi || connectingNetworkId) return
     const previous = connectedNetwork
-    setConnectedNetwork(network)
-    setWifiNetworks(networks => networks.map(net => ({
-      ...net,
-      connected: net.id === network.id,
-    })))
-    setShowNetworks(false)
-
-    if (!window.electronAPI?.connectWifiNetwork) return
-
     setConnectingNetworkId(network.id)
-    try {
-      const result = await window.electronAPI.connectWifiNetwork(network.name)
-      if (result?.ok === false) {
-        setConnectedNetwork(previous)
-        setWifiNetworks(networks => networks.map(net => ({
-          ...net,
-          connected: previous ? net.id === previous.id : false,
-        })))
-        setShowNetworks(true)
-      }
-    } catch {
-      setConnectedNetwork(previous)
+    setWifiError(null)
+
+    if (!window.electronAPI?.connectWifiNetwork) {
+      // Simulation or no API (e.g. running on macOS development environment)
+      await new Promise(resolve => setTimeout(resolve, 800))
+      setConnectedNetwork(network)
       setWifiNetworks(networks => networks.map(net => ({
         ...net,
-        connected: previous ? net.id === previous.id : false,
+        connected: net.id === network.id,
       })))
-      setShowNetworks(true)
+      setConnectingNetworkId(null)
+      setShowNetworks(false)
+      return
+    }
+
+    try {
+      const result = await window.electronAPI.connectWifiNetwork(network.name)
+      if (result?.ok !== false) {
+        setConnectedNetwork(network)
+        setWifiNetworks(networks => networks.map(net => ({
+          ...net,
+          connected: net.id === network.id,
+        })))
+        setShowNetworks(false)
+      } else {
+        setWifiError(result.error || 'Failed to connect')
+      }
+    } catch (err) {
+      setWifiError(err?.message || 'Failed to connect')
     } finally {
       setConnectingNetworkId(null)
     }
@@ -406,6 +412,11 @@ export default function ControlCenter({
           {wifi && showNetworks && (
             <div className="cc-network-list" role="listbox" aria-label="Available networks">
               <div className="cc-network-list-title">Available Networks</div>
+              {wifiError && (
+                <div className="cc-network-error" role="alert">
+                  ⚠️ {wifiError}
+                </div>
+              )}
               {wifiNetworks.map(net => (
                 <button
                   type="button"
@@ -420,7 +431,11 @@ export default function ControlCenter({
                   <span className="cc-net-name">{net.name}</span>
                   {net.secured && <span className="cc-net-lock" aria-label="Secured">🔒</span>}
                   {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
-                  {connectedNetwork?.id === net.id && <span className="cc-net-check">✓</span>}
+                  {connectingNetworkId === net.id ? (
+                    <span className="cc-net-spinner" aria-label="Connecting..." />
+                  ) : connectedNetwork?.id === net.id ? (
+                    <span className="cc-net-check">✓</span>
+                  ) : null}
                 </button>
               ))}
             </div>
