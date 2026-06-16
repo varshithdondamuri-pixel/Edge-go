@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import AgentPanel from './AgentPanel'
 
 // Leading-and-trailing throttle-debounce helper
 function throttleDebounce(func, delay) {
@@ -63,6 +64,38 @@ export default function ControlCenter({
   const [connectingNetworkId, setConnectingNetworkId] = useState(null)
   const [screenshotActive, setScreenshotActive] = useState(false)
   const screenshotTimerRef = useRef(null)
+
+  // AI Agent & Instagram Tab states
+  const [activeTab, setActiveTab] = useState('controls')
+  const [instagramPosts, setInstagramPosts] = useState([
+    { id: 1, user: 'edgego_beta', caption: 'Running Clicky Windows Beta! 🚀', likes: 45, date: 'Just now' },
+    { id: 2, user: 'ai_enthusiast', caption: 'Notch-based assistants are the future! 🔥', likes: 128, date: '2h ago' },
+    { id: 3, user: 'designer_daily', caption: 'Stunning glassmorphic UI layout concept.', likes: 95, date: '5h ago' }
+  ])
+
+  useEffect(() => {
+    if (!window.electronAPI?.onAgentMsg) return
+
+    const unsubscribe = window.electronAPI.onAgentMsg((data) => {
+      if (data.type === 'instagram_activity') {
+        const { action, content, username } = data
+        if (action === 'post' && content) {
+          setInstagramPosts(prev => [
+            {
+              id: prev.length + 1,
+              user: username || 'edgego_beta',
+              caption: content,
+              likes: Math.floor(Math.random() * 15) + 5,
+              date: 'Just now'
+            },
+            ...prev
+          ])
+        }
+      }
+    })
+
+    return () => unsubscribe()
+  }, [])
 
   const setControlPending = useCallback((control, pending) => {
     setPendingControls(prev => ({ ...prev, [control]: pending }))
@@ -301,276 +334,343 @@ export default function ControlCenter({
           </div>
         </div>
 
-        <div className="cc-body">
+        {/* ── Tabs Navigation ── */}
+        <div className="cc-tabs" style={{ display: 'flex', gap: '8px', padding: '0 16px 10px', borderBottom: '1px solid var(--color-border)' }}>
+          {[
+            { id: 'controls', label: 'Controls', icon: '🎛️' },
+            { id: 'agent', label: 'AI Agent', icon: '🤖' },
+            { id: 'instagram', label: 'Instagram', icon: '📸' }
+          ].map(tab => (
+            <button
+              type="button"
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                flex: 1,
+                padding: '8px 4px',
+                borderRadius: '12px',
+                border: 'none',
+                background: activeTab === tab.id ? 'var(--color-border)' : 'transparent',
+                color: activeTab === tab.id ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                fontWeight: activeTab === tab.id ? '600' : '500',
+                fontSize: '11px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                transition: 'all 0.2s'
+              }}
+            >
+              <span>{tab.icon}</span>
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
 
-          {/* ── Media Sessions ── */}
-          {allSessions.length > 0 && (
-            <div className="cc-media-section">
-              <div className="cc-media-header">
-                <span>🎵 Background Media</span>
-                <span style={{ fontSize: '9px', opacity: 0.6 }}>({allSessions.length})</span>
+        <div className="cc-body" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
+          {activeTab === 'controls' && (
+            <>
+              {/* ── Media Sessions ── */}
+              {allSessions.length > 0 && (
+                <div className="cc-media-section">
+                  <div className="cc-media-header">
+                    <span>🎵 Background Media</span>
+                    <span style={{ fontSize: '9px', opacity: 0.6 }}>({allSessions.length})</span>
+                  </div>
+                  <div className="cc-media-list">
+                    {allSessions.map((session, idx) => (
+                      <div key={idx} className="cc-media-item">
+                        <div className="cc-media-art">
+                          {session.source === 'Spotify' ? '🎧' : '🎶'}
+                        </div>
+                        <div className="cc-media-info">
+                          <div className="cc-media-title">{session.title}</div>
+                          <div className="cc-media-artist">{session.artist} • {session.source}</div>
+                        </div>
+                        <div className="cc-media-controls">
+                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
+                          </button>
+                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
+                            {session.isPlaying ? (
+                              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            )}
+                          </button>
+                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Row 1: Network tile group ── */}
+              <div className="cc-tile-group cc-network-group">
+                {/* Wi-Fi */}
+                <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''} ${isPending('wifi') ? 'pending' : ''}`}>
+                  <button
+                    type="button"
+                    id="cc-wifi-toggle"
+                    className="cc-tile-inner"
+                    onClick={toggleWifi}
+                    disabled={isPending('wifi') || isPending('airplaneMode')}
+                    aria-pressed={wifi}
+                  >
+                    <div className="cc-tile-icon">
+                      <WifiIcon2 active={wifi} />
+                    </div>
+                    <div className="cc-tile-info">
+                      <div className="cc-tile-name">Wi-Fi</div>
+                      <div className="cc-tile-sub">{wifi ? connectedNetwork?.name || 'On' : 'Off'}</div>
+                    </div>
+                  </button>
+                  {wifi && (
+                    <button
+                      type="button"
+                      id="cc-network-expand"
+                      className="cc-tile-expand"
+                      onClick={(e) => { e.stopPropagation(); setShowNetworks(v => !v) }}
+                      disabled={isPending('wifi') || isPending('airplaneMode')}
+                      aria-label="Show networks"
+                      title="Networks"
+                    >
+                      <ChevronIcon />
+                    </button>
+                  )}
+                </div>
+
+                {/* Bluetooth */}
+                <button
+                  type="button"
+                  id="cc-bluetooth"
+                  className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
+                  onClick={toggleBluetooth}
+                  disabled={isPending('bluetooth') || isPending('airplaneMode')}
+                  aria-pressed={bluetooth}
+                >
+                  <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
+                  <div className="cc-tile-info">
+                    <div className="cc-tile-name">Bluetooth</div>
+                    <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
+                  </div>
+                </button>
+
+                {/* Airplane */}
+                <button
+                  type="button"
+                  id="cc-airplane"
+                  className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
+                  onClick={toggleAirplaneMode}
+                  disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')}
+                  aria-pressed={airplaneMode}
+                >
+                  <div className="cc-tile-icon">✈️</div>
+                  <div className="cc-tile-info">
+                    <div className="cc-tile-name">Airplane</div>
+                    <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
+                  </div>
+                </button>
               </div>
-              <div className="cc-media-list">
-                {allSessions.map((session, idx) => (
-                  <div key={idx} className="cc-media-item">
-                    <div className="cc-media-art">
-                      {session.source === 'Spotify' ? '🎧' : '🎶'}
+
+              {/* ── Wi-Fi Networks dropdown ── */}
+              {wifi && showNetworks && (
+                <div className="cc-network-list" role="listbox" aria-label="Available networks">
+                  <div className="cc-network-list-title">Available Networks</div>
+                  {wifiError && (
+                    <div className="cc-network-error" role="alert">
+                      ⚠️ {wifiError}
                     </div>
-                    <div className="cc-media-info">
-                      <div className="cc-media-title">{session.title}</div>
-                      <div className="cc-media-artist">{session.artist} • {session.source}</div>
-                    </div>
-                    <div className="cc-media-controls">
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
-                      </button>
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
-                        {session.isPlaying ? (
-                          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                        ) : (
-                          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                        )}
-                      </button>
-                      <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                      </button>
+                  )}
+                  {wifiNetworks.map(net => (
+                    <button
+                      type="button"
+                      key={net.id}
+                      className={`cc-network-item ${connectedNetwork?.id === net.id ? 'connected' : ''} ${connectingNetworkId === net.id ? 'pending' : ''}`}
+                      role="option"
+                      aria-selected={connectedNetwork?.id === net.id}
+                      disabled={!!connectingNetworkId}
+                      onClick={() => selectNetwork(net)}
+                    >
+                      <WifiSignal strength={net.strength} />
+                      <span className="cc-net-name">{net.name}</span>
+                      {net.secured && <span className="cc-net-lock" aria-label="Secured">🔒</span>}
+                      {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
+                      {connectingNetworkId === net.id ? (
+                        <span className="cc-net-spinner" aria-label="Connecting..." />
+                      ) : connectedNetwork?.id === net.id ? (
+                        <span className="cc-net-check">✓</span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* ── Row 2: Focus / DND ── */}
+              <div className="cc-tile-group cc-focus-group">
+                <div className="cc-focus-label">Focus Mode</div>
+                <div className="cc-focus-pills">
+                  {[
+                    { id: 'off',      icon: '🔔', label: 'Off' },
+                    { id: 'work',     icon: '💼', label: 'Work' },
+                    { id: 'personal', icon: '🏠', label: 'Personal' },
+                    { id: 'sleep',    icon: '🌙', label: 'Sleep' },
+                  ].map(f => (
+                    <button
+                      type="button"
+                      key={f.id}
+                      className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
+                      onClick={() => selectFocusMode(f.id)}
+                      disabled={isPending('dnd')}
+                      aria-pressed={focusMode === f.id}
+                      id={`focus-${f.id}`}
+                    >
+                      <span className="cc-focus-pill-icon">{f.icon}</span>
+                      <span>{f.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Row 3: Sliders ── */}
+              <div className="cc-sliders">
+                {/* Brightness */}
+                <div className="cc-slider-row">
+                  <span className="cc-slider-icon" title="Brightness">
+                    <BrightnessIcon level={brightness} />
+                  </span>
+                  <div className="cc-slider-wrap">
+                    <input
+                      id="cc-brightness"
+                      type="range" min={0} max={100}
+                      value={brightness}
+                      onInput={handleBrightnessChange}
+                      onChange={handleBrightnessChange}
+                      className="cc-slider"
+                      aria-label="Brightness"
+                      aria-valuetext={`${brightness}%`}
+                    />
+                  </div>
+                  <span className="cc-slider-val">{brightness}%</span>
+                </div>
+
+                {/* Volume */}
+                <div className="cc-slider-row">
+                  <span className="cc-slider-icon" title="Volume">
+                    {mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}
+                  </span>
+                  <div className="cc-slider-wrap">
+                    <input
+                      id="cc-volume"
+                      type="range" min={0} max={100}
+                      value={mediaVolume}
+                      onInput={handleVolumeInput}
+                      onChange={handleVolumeInput}
+                      className="cc-slider"
+                      aria-label="Volume"
+                      aria-valuetext={`${mediaVolume}%`}
+                    />
+                  </div>
+                  <span className="cc-slider-val">{mediaVolume}%</span>
+                </div>
+              </div>
+
+              {/* ── Row 4: Quick toggles ── */}
+              <div className="cc-quick-grid">
+                <QuickTile
+                  id="qt-dnd"
+                  icon={dnd ? '🔕' : '🔔'}
+                  label="DND"
+                  active={dnd}
+                  disabled={isPending('dnd')}
+                  onClick={toggleDnd}
+                />
+                <QuickTile
+                  id="qt-nightlight"
+                  icon="🌙"
+                  label="Night Light"
+                  active={nightLight}
+                  disabled={isPending('nightLight')}
+                  onClick={toggleNightLight}
+                />
+                <QuickTile
+                  id="qt-screenshot"
+                  icon="📸"
+                  label="Screenshot"
+                  active={screenshotActive}
+                  onClick={takeScreenshot}
+                />
+                <QuickTile
+                  id="qt-clipboard"
+                  icon="📋"
+                  label="Clipboard"
+                  active={false}
+                  onClick={() => onOpenClipboard?.()}
+                />
+              </div>
+
+              {/* ── Row 5: Battery status ── */}
+              <div className="cc-battery-status">
+                <div className="cc-batt-left">
+                  <div className="cc-batt-icon-wrap">
+                    <div 
+                      className="cc-batt-bar" 
+                      style={{ 
+                        width: `${level}%`, 
+                        background: level > 20 ? '#4ade80' : '#f87171' 
+                      }} 
+                    />
+                  </div>
+                  <div className="cc-batt-meta">
+                    <span className="cc-batt-pct">{level}%</span>
+                    <span className="cc-batt-state">
+                      {charging ? 'Charging' : 'Discharging'}
+                    </span>
+                  </div>
+                </div>
+                <div className="cc-batt-history">
+                  {[65,70,74,73,level].map((v,i) => (
+                    <div key={i} className="cc-batt-bar-mini" style={{ height: `${v * 0.28}px` }} />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'agent' && (
+            <AgentPanel />
+          )}
+
+          {activeTab === 'instagram' && (
+            <div className="cc-instagram-widget">
+              <div className="cc-instagram-header">
+                <span className="cc-instagram-brand">Instagram Portal</span>
+                <span className="cc-agent-status" style={{ fontSize: '9px' }}>
+                  <span className="cc-agent-dot online" /> Simulated API Active
+                </span>
+              </div>
+              <div className="cc-instagram-stats">
+                <div className="cc-instagram-stat"><span>{instagramPosts.length}</span> posts</div>
+                <div className="cc-instagram-stat"><span>12.4K</span> followers</div>
+                <div className="cc-instagram-stat"><span>342</span> following</div>
+              </div>
+              <div className="cc-instagram-feed">
+                {instagramPosts.map(post => (
+                  <div key={post.id} className="cc-instagram-post">
+                    <div className="cc-instagram-user">@{post.user}</div>
+                    <div className="cc-instagram-caption">{post.caption}</div>
+                    <div className="cc-instagram-post-footer">
+                      ❤️ {post.likes} likes • {post.date}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
-
-          {/* ── Row 1: Network tile group ── */}
-          <div className="cc-tile-group cc-network-group">
-            {/* Wi-Fi */}
-            <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''} ${isPending('wifi') ? 'pending' : ''}`}>
-              <button
-                type="button"
-                id="cc-wifi-toggle"
-                className="cc-tile-inner"
-                onClick={toggleWifi}
-                disabled={isPending('wifi') || isPending('airplaneMode')}
-                aria-pressed={wifi}
-              >
-                <div className="cc-tile-icon">
-                  <WifiIcon2 active={wifi} />
-                </div>
-                <div className="cc-tile-info">
-                  <div className="cc-tile-name">Wi-Fi</div>
-                  <div className="cc-tile-sub">{wifi ? connectedNetwork?.name || 'On' : 'Off'}</div>
-                </div>
-              </button>
-              {wifi && (
-                <button
-                  type="button"
-                  id="cc-network-expand"
-                  className="cc-tile-expand"
-                  onClick={(e) => { e.stopPropagation(); setShowNetworks(v => !v) }}
-                  disabled={isPending('wifi') || isPending('airplaneMode')}
-                  aria-label="Show networks"
-                  title="Networks"
-                >
-                  <ChevronIcon />
-                </button>
-              )}
-            </div>
-
-            {/* Bluetooth */}
-            <button
-              type="button"
-              id="cc-bluetooth"
-              className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
-              onClick={toggleBluetooth}
-              disabled={isPending('bluetooth') || isPending('airplaneMode')}
-              aria-pressed={bluetooth}
-            >
-              <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
-              <div className="cc-tile-info">
-                <div className="cc-tile-name">Bluetooth</div>
-                <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
-              </div>
-            </button>
-
-            {/* Airplane */}
-            <button
-              type="button"
-              id="cc-airplane"
-              className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
-              onClick={toggleAirplaneMode}
-              disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')}
-              aria-pressed={airplaneMode}
-            >
-              <div className="cc-tile-icon">✈️</div>
-              <div className="cc-tile-info">
-                <div className="cc-tile-name">Airplane</div>
-                <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
-              </div>
-            </button>
-          </div>
-
-          {/* ── Wi-Fi Networks dropdown ── */}
-          {wifi && showNetworks && (
-            <div className="cc-network-list" role="listbox" aria-label="Available networks">
-              <div className="cc-network-list-title">Available Networks</div>
-              {wifiError && (
-                <div className="cc-network-error" role="alert">
-                  ⚠️ {wifiError}
-                </div>
-              )}
-              {wifiNetworks.map(net => (
-                <button
-                  type="button"
-                  key={net.id}
-                  className={`cc-network-item ${connectedNetwork?.id === net.id ? 'connected' : ''} ${connectingNetworkId === net.id ? 'pending' : ''}`}
-                  role="option"
-                  aria-selected={connectedNetwork?.id === net.id}
-                  disabled={!!connectingNetworkId}
-                  onClick={() => selectNetwork(net)}
-                >
-                  <WifiSignal strength={net.strength} />
-                  <span className="cc-net-name">{net.name}</span>
-                  {net.secured && <span className="cc-net-lock" aria-label="Secured">🔒</span>}
-                  {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
-                  {connectingNetworkId === net.id ? (
-                    <span className="cc-net-spinner" aria-label="Connecting..." />
-                  ) : connectedNetwork?.id === net.id ? (
-                    <span className="cc-net-check">✓</span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* ── Row 2: Focus / DND ── */}
-          <div className="cc-tile-group cc-focus-group">
-            <div className="cc-focus-label">Focus Mode</div>
-            <div className="cc-focus-pills">
-              {[
-                { id: 'off',      icon: '🔔', label: 'Off' },
-                { id: 'work',     icon: '💼', label: 'Work' },
-                { id: 'personal', icon: '🏠', label: 'Personal' },
-                { id: 'sleep',    icon: '🌙', label: 'Sleep' },
-              ].map(f => (
-                <button
-                  type="button"
-                  key={f.id}
-                  className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
-                  onClick={() => selectFocusMode(f.id)}
-                  disabled={isPending('dnd')}
-                  aria-pressed={focusMode === f.id}
-                  id={`focus-${f.id}`}
-                >
-                  <span className="cc-focus-pill-icon">{f.icon}</span>
-                  <span>{f.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Row 3: Sliders ── */}
-          <div className="cc-sliders">
-            {/* Brightness */}
-            <div className="cc-slider-row">
-              <span className="cc-slider-icon" title="Brightness">
-                <BrightnessIcon level={brightness} />
-              </span>
-              <div className="cc-slider-wrap">
-                <input
-                  id="cc-brightness"
-                  type="range" min={0} max={100}
-                  value={brightness}
-                  onInput={handleBrightnessChange}
-                  onChange={handleBrightnessChange}
-                  className="cc-slider"
-                  aria-label="Brightness"
-                  aria-valuetext={`${brightness}%`}
-                />
-              </div>
-              <span className="cc-slider-val">{brightness}%</span>
-            </div>
-
-            {/* Volume */}
-            <div className="cc-slider-row">
-              <span className="cc-slider-icon" title="Volume">
-                {mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}
-              </span>
-              <div className="cc-slider-wrap">
-                <input
-                  id="cc-volume"
-                  type="range" min={0} max={100}
-                  value={mediaVolume}
-                  onInput={handleVolumeInput}
-                  onChange={handleVolumeInput}
-                  className="cc-slider"
-                  aria-label="Volume"
-                  aria-valuetext={`${mediaVolume}%`}
-                />
-              </div>
-              <span className="cc-slider-val">{mediaVolume}%</span>
-            </div>
-          </div>
-
-          {/* ── Row 4: Quick toggles ── */}
-          <div className="cc-quick-grid">
-            <QuickTile
-              id="qt-dnd"
-              icon={dnd ? '🔕' : '🔔'}
-              label="DND"
-              active={dnd}
-              disabled={isPending('dnd')}
-              onClick={toggleDnd}
-            />
-            <QuickTile
-              id="qt-nightlight"
-              icon="🌙"
-              label="Night Light"
-              active={nightLight}
-              disabled={isPending('nightLight')}
-              onClick={toggleNightLight}
-            />
-            <QuickTile
-              id="qt-screenshot"
-              icon="📸"
-              label="Screenshot"
-              active={screenshotActive}
-              onClick={takeScreenshot}
-            />
-            <QuickTile
-              id="qt-clipboard"
-              icon="📋"
-              label="Clipboard"
-              active={false}
-              onClick={() => onOpenClipboard?.()}
-            />
-          </div>
-
-          {/* ── Row 5: Battery status ── */}
-          <div className="cc-battery-status">
-            <div className="cc-batt-left">
-              <div className="cc-batt-icon-wrap">
-                <div 
-                  className="cc-batt-bar" 
-                  style={{ 
-                    width: `${level}%`, 
-                    background: level > 20 ? '#4ade80' : '#f87171' 
-                  }} 
-                />
-              </div>
-              <div className="cc-batt-meta">
-                <span className="cc-batt-pct">{level}%</span>
-                <span className="cc-batt-state">
-                  {charging ? 'Charging' : 'Discharging'}
-                </span>
-              </div>
-            </div>
-            <div className="cc-batt-history">
-              {[65,70,74,73,level].map((v,i) => (
-                <div key={i} className="cc-batt-bar-mini" style={{ height: `${v * 0.28}px` }} />
-              ))}
-            </div>
-          </div>
-
         </div>
 
         {/* Dock handle */}

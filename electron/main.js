@@ -17,6 +17,7 @@ const {
 } = require('electron')
 const path = require('path')
 const os = require('os')
+const fs = require('fs')
 const { exec } = require('child_process')
 
 const isDev = !app.isPackaged
@@ -1602,6 +1603,171 @@ ipcMain.on('open-devtools', (event) => {
   if (owner && !owner.isDestroyed()) owner.webContents.openDevTools({ mode: 'detach' })
 })
 
+// ─── Agent Daemon & Pointing Overlay ───────────────────────────────────────
+let agentProcess = null
+let pointerOverlayWindow = null
+
+function createPointerOverlayWindow() {
+  if (pointerOverlayWindow) return
+
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { width, height } = primaryDisplay.bounds
+
+  pointerOverlayWindow = new BrowserWindow({
+    width,
+    height,
+    x: 0,
+    y: 0,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    hasShadow: false,
+    show: false,
+    focusable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    }
+  })
+
+  pointerOverlayWindow.setIgnoreMouseEvents(true, { forward: true })
+
+  const overlayUrl = isDev
+    ? 'http://localhost:5173/?overlay=true'
+    : `file://${path.join(__dirname, '../dist/index.html')}?overlay=true`
+
+  pointerOverlayWindow.loadURL(overlayUrl)
+
+  pointerOverlayWindow.on('closed', () => {
+    pointerOverlayWindow = null
+  })
+}
+
+function startAgentDaemon() {
+  if (agentProcess) return
+
+  const daemonPath = path.join(__dirname, 'agent_daemon.py')
+  
+  let pythonCmd = 'python3'
+  if (process.platform === 'win32') {
+    pythonCmd = 'python'
+  }
+
+  const envCopy = { ...process.env }
+  try {
+    const dotenvPath = path.join(__dirname, '../.env')
+    if (fs.existsSync(dotenvPath)) {
+      const dotenvContent = fs.readFileSync(dotenvPath, 'utf-8')
+      dotenvContent.split('\n').forEach(line => {
+        const parts = line.split('=')
+        if (parts.length >= 2) {
+          const key = parts[0].trim()
+          const val = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '')
+          if (key) envCopy[key] = val
+        }
+      })
+    }
+  } catch (e) {
+    console.warn('[Agent Daemon] Error loading local .env:', e.message)
+  }
+
+  agentProcess = spawn(pythonCmd, [daemonPath], {
+    env: envCopy
+  })
+
+  let buffer = ''
+  agentProcess.stdout.on('data', (data) => {
+    buffer += data.toString()
+    const lines = buffer.split('\n')
+    buffer = lines.pop()
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const payload = JSON.parse(trimmed)
+        
+        if (payload.type === 'wake') {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show()
+            notchState.state = 'expanded'
+            applyNotchBounds(true)
+            mainWindow.webContents.send('agent-msg', payload)
+          }
+        } else if (payload.type === 'pointer_animation') {
+          if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+            pointerOverlayWindow.show()
+            pointerOverlayWindow.webContents.send('agent-msg', payload)
+            setTimeout(() => {
+              if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+                pointerOverlayWindow.hide()
+              }
+            }, 3000)
+          }
+        } else {
+          BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+              win.webContents.send('agent-msg', payload)
+            }
+          })
+        }
+      } catch (e) {
+        console.warn('[Agent stdout JSON error]:', trimmed, e.message)
+      }
+    }
+  })
+
+  agentProcess.stderr.on('data', (data) => {
+    const msg = data.toString().trim()
+    if (msg) console.warn('[Agent daemon stderr]', msg)
+  })
+
+  agentProcess.on('close', (code) => {
+    console.log(`[Agent daemon] exited (code=${code}), restarting in 5s…`)
+    agentProcess = null
+    if (app.isReady() && !app.isQuitting) {
+      setTimeout(startAgentDaemon, 5000)
+    }
+  })
+}
+
+ipcMain.on('send-agent-prompt', (_, text) => {
+  if (agentProcess && agentProcess.stdin && !agentProcess.stdin.destroyed) {
+    try {
+      const payload = JSON.stringify({ type: 'prompt', text })
+      agentProcess.stdin.write(payload + '\n')
+    } catch (e) {
+      console.error('[Agent daemon] Stdin write error:', e.message)
+    }
+  } else {
+    startAgentDaemon()
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('agent-msg', {
+          type: 'error',
+          message: 'Agent daemon is starting up. Please wait and try again.'
+        })
+      }
+    })
+  }
+})
+
+ipcMain.on('set-wake-word', (_, enabled) => {
+  if (agentProcess && agentProcess.stdin && !agentProcess.stdin.destroyed) {
+    try {
+      const payload = JSON.stringify({ type: 'set_wake_word', enabled })
+      agentProcess.stdin.write(payload + '\n')
+    } catch (e) {
+      console.error('[Agent daemon] Stdin write error:', e.message)
+    }
+  }
+})
+
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -1613,7 +1779,9 @@ app.whenReady().then(() => {
   }
 
   startWindowsMediaDaemon()   // no-op on non-Windows
+  startAgentDaemon()
   createWindow()
+  createPointerOverlayWindow()
 
   try {
     createTray()
@@ -1658,6 +1826,11 @@ app.on('will-quit', () => {
   if (winMediaProcess) {
     try {
       winMediaProcess.kill()
+    } catch {}
+  }
+  if (agentProcess) {
+    try {
+      agentProcess.kill()
     } catch {}
   }
   globalShortcut.unregisterAll()

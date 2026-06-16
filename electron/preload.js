@@ -67,4 +67,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('open-clipboard', handler)
     return () => ipcRenderer.removeListener('open-clipboard', handler)
   },
+
+  // Agent Communication
+  sendAgentPrompt: (text) => ipcRenderer.send('send-agent-prompt', text),
+  setWakeWord: (enabled) => ipcRenderer.send('set-wake-word', enabled),
+  onAgentMsg: (cb) => {
+    const handler = (_event, data) => cb(data)
+    ipcRenderer.on('agent-msg', handler)
+    return () => ipcRenderer.removeListener('agent-msg', handler)
+  },
 })
