@@ -46,7 +46,8 @@ export default function NotchBar({
   const expandTimer = useRef(null)
   const hoveringRef = useRef(false)
   const wasOverlayOpenRef = useRef(false)
-  const miniTitle = media.title || 'No media playing'
+  const safeMedia = media || {}
+  const miniTitle = safeMedia.title || 'No media playing'
 
   const isOverlayOpenRef = useRef(isOverlayOpen)
   isOverlayOpenRef.current = isOverlayOpen
@@ -187,20 +188,20 @@ export default function NotchBar({
           <div className="notch-collapsed-view" aria-hidden={expanded}>
             <div className="ncv-left">
               <div className="mini-album-art">
-                {media.albumArt
-                  ? <img src={media.albumArt} alt={media.album} />
+                {safeMedia.albumArt
+                  ? <img src={safeMedia.albumArt} alt={safeMedia.album} />
                   : <span className="mini-album-emoji">♪</span>
                 }
               </div>
-              <AudioVizMini isPlaying={media.isPlaying} />
+              <AudioVizMini isPlaying={safeMedia.isPlaying} />
               <div className="mini-track-name">
                 <span className={miniTitle.length > 16 ? 'scroll-text' : ''}>
                   {miniTitle}
                 </span>
               </div>
               {/* Mini source pill */}
-              {media.source && (
-                <span className="mini-source-pill">{media.source}</span>
+              {safeMedia.source && (
+                <span className="mini-source-pill">{safeMedia.source}</span>
               )}
             </div>
             <div className="ncv-right">
@@ -214,11 +215,11 @@ export default function NotchBar({
             {/* LEFT: Music player with Spotify connector */}
             <div className="notch-left-panel">
               {/* Source connector bar */}
-              {settings.showSource !== false && media.source && (
-                <SourceConnector source={media.source} />
+              {settings.showSource !== false && safeMedia.source && (
+                <SourceConnector source={safeMedia.source} />
               )}
               <MusicPlayer
-                media={media}
+                media={safeMedia}
                 settings={settings}
                 onPlayPause={onPlayPause}
                 onNext={onNext}
@@ -315,7 +316,7 @@ function AudioVizMini({ isPlaying }) {
 }
 
 function BatteryMini({ battery }) {
-  const { level, charging, available } = battery
+  const { level = 100, charging = false, available = false } = battery || {}
   if (!available) return null
   const colorClass = level > 60 ? 'high' : level > 20 ? 'mid' : 'low'
   return (

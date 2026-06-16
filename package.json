@@ -1,6 +1,6 @@
 {
   "name": "edge-go",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Edge Go — a sleek always-on-top floating HUD bar for Windows",
   "main": "electron/main.js",
   "homepage": "./",
@@ -21,7 +21,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.png",

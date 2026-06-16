@@ -1,5 +1,5 @@
 export default function BatteryIndicator({ battery, settings = {} }) {
-  const { level, charging, available } = battery
+  const { level = 100, charging = false, available = false } = battery || {}
 
   if (!available) {
     return null

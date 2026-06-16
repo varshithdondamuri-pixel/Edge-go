@@ -18,10 +18,10 @@ export default function MusicPlayer({
     source,
     albumArt,
     isPlaying,
-    volume,
-    position,
-    duration,
-  } = media
+    volume = 50,
+    position = 0,
+    duration = 0,
+  } = media || {}
   const progressRef = useRef(null)
   const displayTitle = title || 'No media playing'
   const displayArtist = artist || 'Start audio in any Windows media app'

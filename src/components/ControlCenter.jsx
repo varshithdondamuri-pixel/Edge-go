@@ -40,13 +40,14 @@ export default function ControlCenter({
   open, 
   onClose, 
   onOpenSettings, 
-  battery = { level: 100, charging: false }, 
+  battery, 
   mediaVolume = 50, 
   onVolumeChange,
   allSessions = [],
   onMediaCommand,
   onOpenClipboard,
 }) {
+  const { level = 100, charging = false, available = false } = battery || {}
   const [wifi, setWifi] = useState(true)
   const [bluetooth, setBluetooth] = useState(true)
   const [dnd, setDnd] = useState(false)
@@ -551,20 +552,20 @@ export default function ControlCenter({
                 <div 
                   className="cc-batt-bar" 
                   style={{ 
-                    width: `${battery.level}%`, 
-                    background: battery.level > 20 ? '#4ade80' : '#f87171' 
+                    width: `${level}%`, 
+                    background: level > 20 ? '#4ade80' : '#f87171' 
                   }} 
                 />
               </div>
               <div className="cc-batt-meta">
-                <span className="cc-batt-pct">{battery.level}%</span>
+                <span className="cc-batt-pct">{level}%</span>
                 <span className="cc-batt-state">
-                  {battery.charging ? 'Charging' : 'Discharging'}
+                  {charging ? 'Charging' : 'Discharging'}
                 </span>
               </div>
             </div>
             <div className="cc-batt-history">
-              {[65,70,74,73,battery.level].map((v,i) => (
+              {[65,70,74,73,level].map((v,i) => (
                 <div key={i} className="cc-batt-bar-mini" style={{ height: `${v * 0.28}px` }} />
               ))}
             </div>

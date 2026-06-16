@@ -51,6 +51,9 @@ let tray
 let winMediaProcess = null
 let lastWindowsMediaData = []
 let lastKnownVolume = 50
+let lastSmtcNonEmptyAt = 0
+let spotifyFallbackActive = false
+let pendingVolumeFallbackTimer = null
 let boundsTimeout = null
 // Tracks the notch's saved position so restores are correct
 const notchState = {
@@ -263,6 +266,7 @@ function createWindow() {
     movable: true,
     hasShadow: false,
     show: false,
+    focusable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -285,6 +289,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
     mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   })
 
   mainWindow.on('blur', () => {
@@ -604,10 +609,34 @@ async function setSystemControl(control, value) {
   if (control === 'brightness') {
     script = `
 $ErrorActionPreference = 'Stop'
-$methods = Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods
-if (-not $methods) { throw 'No controllable laptop brightness interface found' }
-foreach ($method in @($methods)) {
-  $method.WmiSetBrightness(1, ${numberValue}) | Out-Null
+$level = ${numberValue}
+$set = $false
+
+$cimMethods = @(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue)
+foreach ($method in $cimMethods) {
+  try {
+    Invoke-CimMethod -InputObject $method -MethodName WmiSetBrightness -Arguments @{ Timeout = 1; Brightness = $level } -ErrorAction Stop | Out-Null
+    $set = $true
+  } catch {}
+}
+
+if (-not $set) {
+  $wmiMethods = @(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue)
+  foreach ($method in $wmiMethods) {
+    try {
+      $method.WmiSetBrightness(1, $level) | Out-Null
+      $set = $true
+    } catch {}
+  }
+}
+
+if (-not $set) { throw 'No controllable laptop brightness interface found' }
+Start-Sleep -Milliseconds 120
+$current = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue | Select-Object -First 1).CurrentBrightness
+if ($current -ne $null) {
+  [int]$current
+} else {
+  [int]$level
 }
 `
   } else if (control === 'dnd') {
@@ -624,6 +653,23 @@ if ($data -and $data.Length -gt 24) {
 `
   } else if (control === 'wifi' || control === 'bluetooth') {
     const radioKind = control === 'wifi' ? 'WiFi' : 'Bluetooth'
+    const netshFallback = control === 'wifi'
+      ? `
+if (-not $setOk) {
+  $wifiName = ''
+  foreach ($line in @(netsh wlan show interfaces)) {
+    if ($line -match '^\\s*Name\\s*:\\s*(.+)$') {
+      $wifiName = $Matches[1].Trim()
+      break
+    }
+  }
+  if (-not $wifiName) { $wifiName = 'Wi-Fi' }
+  $stateText = if (${boolValue}) { 'enabled' } else { 'disabled' }
+  netsh interface set interface name="$wifiName" admin=$stateText | Out-Null
+  $setOk = $true
+}
+`
+      : ''
     script = `
 $ErrorActionPreference = 'Stop'
 [Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null
@@ -634,18 +680,28 @@ function Await-Async($op) {
   return $op.GetResults()
 }
 
-$accessOp = [Windows.Devices.Radios.Radio]::RequestAccessAsync()
-$access = Await-Async $accessOp
-
-$radiosOp = [Windows.Devices.Radios.Radio]::GetRadiosAsync()
-$radios = Await-Async $radiosOp
-
-$radio = $radios | Where-Object { $_.Kind -eq '${radioKind}' }
-if (-not $radio) { throw '${radioKind} radio not found' }
 $state = if (${boolValue}) { 'On' } else { 'Off' }
+$setOk = $false
+$radio = $null
+try {
+  $accessOp = [Windows.Devices.Radios.Radio]::RequestAccessAsync()
+  $access = Await-Async $accessOp
 
-$setStateOp = $radio.SetStateAsync($state)
-$null = Await-Async $setStateOp
+  $radiosOp = [Windows.Devices.Radios.Radio]::GetRadiosAsync()
+  $radios = Await-Async $radiosOp
+
+  $radio = $radios | Where-Object { $_.Kind -eq '${radioKind}' }
+} catch {}
+
+if ($radio) {
+  try {
+    $setStateOp = $radio.SetStateAsync($state)
+    $null = Await-Async $setStateOp
+    $setOk = $true
+  } catch {}
+}
+${netshFallback}
+if (-not $setOk) { throw '${radioKind} radio not found or not controllable' }
 `
   } else if (control === 'airplaneMode') {
     if (value) {
@@ -662,8 +718,13 @@ $null = Await-Async $setStateOp
   }
 
   try {
-    await runPowerShell(script)
-    systemControlState[control] = control === 'brightness' ? numberValue : !!value
+    const out = await runPowerShell(script)
+    if (control === 'brightness') {
+      const actual = Number.parseInt(String(out).trim().split(/\s+/).pop(), 10)
+      systemControlState.brightness = Number.isFinite(actual) ? clamp(actual, 0, 100) : numberValue
+    } else {
+      systemControlState[control] = !!value
+    }
     return { ok: true, state: { ...systemControlState } }
   } catch (e) {
     console.error(`set-system-control ${control} error:`, e.message)
@@ -961,7 +1022,7 @@ function Get-SpotifyTitle {
           Select-Object -First 1
   if (-not $proc) { return $null }
   $t = $proc.MainWindowTitle
-  if ($t -match '^(.+?) - (.+)$') {
+  if ($t -match '^(.+?)\\s[-\\u2013\\u2014]\\s(.+)$') {
     $vol = [math]::Round([EdgeGoAudio.Volume]::Get() * 100)
     return @{ title=$Matches[2].Trim(); artist=$Matches[1].Trim(); album='';
               albumArt=''; isPlaying=$true; position=0; duration=0;
@@ -1003,7 +1064,14 @@ function Invoke-SessionCommand($command, $value, $source) {
     $targetSession = $null
     foreach ($s in $sessions) {
       $id = ([string]$s.SourceAppUserModelId).ToLowerInvariant()
-      if ($target -and $id.Contains($target)) {
+      $isSameFamily = (
+        ($target.Contains("spotify") -and $id.Contains("spotify")) -or
+        ($target.Contains("chrome") -and $id.Contains("chrome")) -or
+        ($target.Contains("edge") -and ($id.Contains("edge") -or $id.Contains("msedge"))) -or
+        ($target.Contains("firefox") -and $id.Contains("firefox")) -or
+        ($target.Contains("vlc") -and $id.Contains("vlc"))
+      )
+      if ($target -and ($id.Contains($target) -or $target.Contains($id) -or $isSameFamily)) {
         $targetSession = $s
         break
       }
@@ -1132,12 +1200,7 @@ while ($true) {
       if (trimmed.startsWith('VOLUME_CHANGE:')) {
         const vol = Number(trimmed.slice('VOLUME_CHANGE:'.length))
         if (!isNaN(vol)) {
-          lastKnownVolume = vol
-          BrowserWindow.getAllWindows().forEach(win => {
-            if (!win.isDestroyed()) {
-              win.webContents.send('volume-updated', vol)
-            }
-          })
+          broadcastVolume(vol)
         }
         continue
       }
@@ -1152,11 +1215,15 @@ while ($true) {
             duration:    Number(s.duration)  || 0,
             position:    Number(s.position)  || 0,
             isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
-            volume:      Number(s.volume)    || lastKnownVolume,
+            volume:      (s.volume !== undefined && s.volume !== null) ? Number(s.volume) : lastKnownVolume,
             source:      s.source      || 'Media',
             sourceAppId: s.sourceAppId || '',
             isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
           })) : []
+          if (sessions.length > 0) {
+            lastSmtcNonEmptyAt = Date.now()
+            spotifyFallbackActive = false
+          }
           pushMediaUpdate(sessions)
         } catch (e) {
           console.error('[SMTC] JSON parse error:', e.message)
@@ -1176,33 +1243,63 @@ while ($true) {
       setTimeout(startWindowsMediaDaemon, 5000)
     }
   })
+
+  startSpotifyFallbackPoller()
 }
 
 
 // ─── Spotify window-title fallback poller (Node-side, no PowerShell) ─────────
-// Activated only if the SMTC daemon fails > 5 times. Reads Spotify's window
-// title from tasklist — the title is "Artist – Song" while something plays.
+// Runs alongside SMTC and only publishes when SMTC is empty/stale. Spotify's
+// window title is "Artist - Song" while something plays.
 let spotifyFallbackTimer = null
+function shouldUseSpotifyFallback() {
+  const hasPlayingSession = lastMediaData.some(s => s?.isPlaying)
+  const hasSpotifySession = lastMediaData.some(s => {
+    const text = `${s?.source || ''} ${s?.sourceAppId || ''}`.toLowerCase()
+    return text.includes('spotify')
+  })
+  return (
+    spotifyFallbackActive ||
+    lastMediaData.length === 0 ||
+    Date.now() - lastSmtcNonEmptyAt > 5000 ||
+    !hasPlayingSession ||
+    !hasSpotifySession
+  )
+}
+
 function startSpotifyFallbackPoller() {
   if (spotifyFallbackTimer || process.platform !== 'win32') return
   const poll = () => {
     exec('tasklist /FI "IMAGENAME eq Spotify.exe" /FO CSV /NH /V', { timeout: 4000 }, (err, stdout) => {
-      if (err || !stdout) { pushMediaUpdate([]); return }
+      if (err || !stdout) {
+        if (spotifyFallbackActive && Date.now() - lastSmtcNonEmptyAt > 5000) {
+          spotifyFallbackActive = false
+          pushMediaUpdate([])
+        }
+        return
+      }
       for (const line of stdout.split('\n')) {
         const cols = line.split('","')
         if (cols.length < 9) continue
         const title = (cols[8] || '').replace(/"/g, '').trim()
         if (!title || /^Spotify( Premium)?$/.test(title)) continue
-        const m = title.match(/^(.+?) - (.+)$/)
+        const m = title.match(/^(.+?)\s[-\u2013\u2014]\s(.+)$/)
         if (!m) continue
-        pushMediaUpdate([{
+        const payload = [{
           title: m[2].trim(), artist: m[1].trim(), album: '',
           albumArt: null, duration: 0, position: 0, isPlaying: true,
-          volume: 50, source: 'Spotify', sourceAppId: 'com.spotify.client', isCurrent: true,
-        }])
+          volume: lastKnownVolume, source: 'Spotify', sourceAppId: 'com.spotify.client', isCurrent: true,
+        }]
+        if (shouldUseSpotifyFallback()) {
+          spotifyFallbackActive = true
+          pushMediaUpdate(payload)
+        }
         return
       }
-      pushMediaUpdate([])
+      if (spotifyFallbackActive && Date.now() - lastSmtcNonEmptyAt > 5000) {
+        spotifyFallbackActive = false
+        pushMediaUpdate([])
+      }
     })
   }
   poll()
@@ -1211,27 +1308,157 @@ function startSpotifyFallbackPoller() {
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
 
+function broadcastVolume(level) {
+  const nextLevel = clamp(Number(level) || 0, 0, 100)
+  lastKnownVolume = nextLevel
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('volume-updated', nextLevel)
+    }
+  })
+}
+
 function sendDaemonCommand(cmd) {
   if (winMediaProcess && winMediaProcess.stdin && !winMediaProcess.stdin.destroyed) {
     try {
       winMediaProcess.stdin.write(cmd + '\n')
+      return true
     } catch (e) {
       console.error('[SMTC] Stdin write error:', e.message)
     }
   }
+  return false
+}
+
+function windowsVolumeScript(level, shouldSet = false) {
+  const scalar = clamp(Number(level) || 0, 0, 100) / 100
+  const setLine = shouldSet ? `[EdgeGoAudioFallback.Volume]::Set([single]${scalar})` : ''
+  return `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace EdgeGoAudioFallback {
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+  class MMDeviceEnumeratorComObject {}
+
+  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator {
+    int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+    int GetDevice(string pwstrId, out IMMDevice ppDevice);
+    int RegisterEndpointNotificationCallback(IntPtr pClient);
+    int UnregisterEndpointNotificationCallback(IntPtr pClient);
+  }
+
+  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice {
+    int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+    int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
+    int GetId(out IntPtr ppstrId);
+    int GetState(out int pdwState);
+  }
+
+  [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out int pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute(bool bMute, Guid pguidEventContext);
+    int GetMute(out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(Guid pguidEventContext);
+    int VolumeStepDown(Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+  }
+
+  public static class Volume {
+    static IAudioEndpointVolume GetEndpoint() {
+      var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+      IMMDevice device;
+      Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+      Guid iid = typeof(IAudioEndpointVolume).GUID;
+      IAudioEndpointVolume endpoint;
+      Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+      return endpoint;
+    }
+
+    public static void Set(float level) {
+      IAudioEndpointVolume endpoint = GetEndpoint();
+      var eventContext = Guid.Empty;
+      Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(level, eventContext));
+      Marshal.ThrowExceptionForHR(endpoint.SetMute(level <= 0.001f, eventContext));
+    }
+
+    public static float Get() {
+      IAudioEndpointVolume endpoint = GetEndpoint();
+      float level;
+      Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
+      return level;
+    }
+  }
+}
+'@
+${setLine}
+[math]::Round([EdgeGoAudioFallback.Volume]::Get() * 100)
+`
+}
+
+async function setWindowsVolumeDirect(level) {
+  const out = await runPowerShell(windowsVolumeScript(level, true))
+  const parsedOut = Number.parseInt(out.trim(), 10)
+  const actual = clamp(!isNaN(parsedOut) ? parsedOut : (Number(level) || 0), 0, 100)
+  broadcastVolume(actual)
+  return actual
+}
+
+async function readWindowsVolumeDirect() {
+  const out = await runPowerShell(windowsVolumeScript(0, false))
+  const actual = clamp(Number.parseInt(out.trim(), 10) || 0, 0, 100)
+  broadcastVolume(actual)
+  return actual
+}
+
+function scheduleWindowsVolumeFallback(level, delay = 140) {
+  if (process.platform !== 'win32') return
+  if (pendingVolumeFallbackTimer) clearTimeout(pendingVolumeFallbackTimer)
+  pendingVolumeFallbackTimer = setTimeout(() => {
+    pendingVolumeFallbackTimer = null
+    setWindowsVolumeDirect(level).catch(e => {
+      console.error('[volume] direct CoreAudio fallback failed:', e.message)
+    })
+  }, delay)
 }
 
 function setWindowsVolume(level) {
   if (process.platform !== 'win32') return Promise.resolve()
   const nextLevel = clamp(Number(level) || 0, 0, 100)
-  lastKnownVolume = nextLevel
   const scalar = nextLevel / 100
-  sendDaemonCommand(`VOLUME:${scalar}`)
+  broadcastVolume(nextLevel)
+  const sent = sendDaemonCommand(`VOLUME:${scalar}`)
+  if (!sent) startWindowsMediaDaemon()
+  scheduleWindowsVolumeFallback(nextLevel, sent ? 160 : 0)
   return Promise.resolve()
 }
 
-function getWindowsVolume() {
-  return lastKnownVolume
+async function getWindowsVolume() {
+  if (process.platform !== 'win32') return lastKnownVolume
+  try {
+    return await readWindowsVolumeDirect()
+  } catch (e) {
+    console.error('[volume] direct read failed:', e.message)
+    return lastKnownVolume
+  }
 }
 
 ipcMain.handle('get-system-volume', async () => getWindowsVolume())
@@ -1244,7 +1471,8 @@ ipcMain.on('media-command', (_, command, value, source) => {
 
   const nextVal = value !== null && value !== undefined ? String(value) : ''
   const nextSrc = source !== null && source !== undefined ? String(source) : ''
-  sendDaemonCommand(`MEDIA:${command}:${nextVal}:${nextSrc}`)
+  const sent = sendDaemonCommand(`MEDIA:${command}:${nextVal}:${nextSrc}`)
+  if (!sent) startWindowsMediaDaemon()
 })
 
 // ─── IPC: Settings sync ──────────────────────────────────────────────────────

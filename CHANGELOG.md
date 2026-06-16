@@ -2,6 +2,13 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.7.0] - 2026-06-16
+
+### Fixed
+- **Windows Volume Control**: Fixed bug where setting system volume to 0 in the UI reset it to the last known volume level.
+- **Safety Checks**: Safeguarded component rendering logic (MusicPlayer, BatteryIndicator, ControlCenter, NotchBar) against null or undefined media and battery properties.
+- **Cleaned Up Repository**: Removed unused/legacy macOS project assets.
+
 ## [1.6.1] - 2026-06-02
 
 ### Added
