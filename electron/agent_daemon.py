@@ -319,6 +319,18 @@ def setup_intent_classifier():
             "use multi-agent system to handle",
             "coordinate agents for complex task",
             "orchestrate research and execution"
+        ],
+        "volume_control": [
+            "increase volume", "decrease volume", "turn up sound", "turn down sound",
+            "mute system volume", "unmute audio sound", "volume up by ten percent",
+            "volume down and lower", "mute sound output", "set volume level to maximum",
+            "make sound louder", "make audio quieter"
+        ],
+        "media_control": [
+            "play music track", "pause media playback", "skip to next song",
+            "go to previous track", "play or pause music", "stop song playing",
+            "resume audio podcast", "next track please", "previous song track",
+            "media skip forward", "media go back one"
         ]
     }
     
@@ -527,11 +539,80 @@ def summarize_text(snippets: list) -> str:
         summary = text[:200] + "..."
     return summary
 
-def select_theme_palette(title: str, description: str) -> dict:
-    """Classifies title and description into an aesthetic dark theme palette."""
-    text = (title + " " + description).lower()
+def select_theme_palette(title: str, description: str, theme_override: str = None) -> dict:
+    """Classifies title and description, or extracts custom colors to build a palette."""
+    combined = (title + " " + description).lower()
     
-    # Keyword classification map
+    # 1. Custom hex colors extraction
+    hex_colors = re.findall(r'#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b', combined)
+    if len(hex_colors) >= 2:
+        accent = f"#{hex_colors[0]}"
+        bg_color = f"#{hex_colors[1]}"
+        return {
+            'name': 'custom-hex',
+            'accent': accent,
+            'bg': bg_color,
+            'surface': f"color-mix(in srgb, {bg_color} 90%, #ffffff 4%)" if bg_color.lower() not in ('#ffffff', '#fff') else '#f8fafc',
+            'border': 'rgba(255,255,255,0.08)' if bg_color.lower() not in ('#ffffff', '#fff') else 'rgba(0,0,0,0.08)',
+            'text': '#ffffff' if bg_color.lower() not in ('#ffffff', '#fff') else '#0f172a',
+            'muted': 'rgba(255,255,255,0.5)' if bg_color.lower() not in ('#ffffff', '#fff') else 'rgba(15,23,42,0.6)',
+            'gradient': f"linear-gradient(135deg, {accent} 0%, color-mix(in srgb, {accent} 70%, #ffffff) 100%)"
+        }
+    elif len(hex_colors) == 1:
+        accent = f"#{hex_colors[0]}"
+        bg_color = '#0a0a0f'
+        return {
+            'name': 'custom-hex',
+            'accent': accent,
+            'bg': bg_color,
+            'surface': '#111118',
+            'border': 'rgba(255,255,255,0.08)',
+            'text': '#f0f0ff',
+            'muted': 'rgba(255,255,255,0.5)',
+            'gradient': f"linear-gradient(135deg, {accent} 0%, color-mix(in srgb, {accent} 70%, #ffffff) 100%)"
+        }
+
+    # 2. Custom named colors
+    color_map = {
+        'red': '#ef4444',
+        'green': '#22c55e',
+        'blue': '#3b82f6',
+        'orange': '#f97316',
+        'purple': '#a855f7',
+        'pink': '#ec4899',
+        'cyan': '#06b6d4',
+        'teal': '#14b8a6',
+        'yellow': '#eab308',
+        'emerald': '#10b981',
+        'indigo': '#6366f1',
+        'amber': '#f59e0b',
+        'rose': '#f43f5e'
+    }
+    
+    accent_color = None
+    bg_color = '#0a0a0f'
+    for c_name, c_hex in color_map.items():
+        if f"{c_name} and" in combined or f"and {c_name}" in combined:
+            if not accent_color:
+                accent_color = c_hex
+            else:
+                bg_color = c_hex
+        elif f"{c_name} theme" in combined or f"theme with {c_name}" in combined or f"{c_name} style" in combined:
+            accent_color = c_hex
+
+    if accent_color:
+        return {
+            'name': 'custom-color',
+            'accent': accent_color,
+            'bg': bg_color,
+            'surface': '#111118' if bg_color == '#0a0a0f' else f"color-mix(in srgb, {bg_color} 90%, #ffffff 4%)",
+            'border': 'rgba(255, 255, 255, 0.08)',
+            'text': '#ffffff' if bg_color != '#ffffff' else '#0f172a',
+            'muted': 'rgba(255,255,255,0.5)' if bg_color != '#ffffff' else 'rgba(15,23,42,0.6)',
+            'gradient': f"linear-gradient(135deg, {accent_color} 0%, color-mix(in srgb, {accent_color} 70%, #ffffff) 100%)"
+        }
+
+    # 3. Predefined themes
     themes = {
         'nature': {
             'keywords': ['nature', 'forest', 'green', 'leaf', 'garden', 'plant', 'tree', 'eco', 'organic', 'agriculture', 'earth'],
@@ -567,17 +648,18 @@ def select_theme_palette(title: str, description: str) -> dict:
         }
     }
     
-    # Find matching theme
     matched_theme = 'default'
-    max_matches = 0
-    for theme_name, theme_data in themes.items():
-        matches = sum(1 for kw in theme_data['keywords'] if kw in text)
-        if matches > max_matches:
-            max_matches = matches
-            matched_theme = theme_name
-            
+    if theme_override and theme_override.lower() in themes:
+        matched_theme = theme_override.lower()
+    else:
+        max_matches = 0
+        for theme_name, theme_data in themes.items():
+            matches = sum(1 for kw in theme_data['keywords'] if kw in combined)
+            if matches > max_matches:
+                max_matches = matches
+                matched_theme = theme_name
+                
     if matched_theme == 'default':
-        # Premium royal indigo default theme
         return {
             'name': 'default',
             'accent': '#7c6af7',
@@ -651,12 +733,62 @@ HTML_TEMPLATE = '''\
     -webkit-text-fill-color: transparent;
     line-height: 1.1;
   }}
+  h2, h3, h4 {{
+    color: #fff;
+    margin-top: 24px;
+    margin-bottom: 16px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }}
+  p {{
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }}
   p.lead {{
     font-size: 18px;
     color: var(--muted);
     line-height: 1.6;
     margin-bottom: 40px;
     max-width: 720px;
+  }}
+  ul, ol {{
+    margin-bottom: 24px;
+    padding-left: 20px;
+    color: var(--muted);
+  }}
+  li {{
+    margin-bottom: 8px;
+    font-size: 14px;
+  }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }}
+  th, td {{
+    padding: 14px 18px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }}
+  th {{
+    background: rgba(255,255,255,0.02);
+    color: #fff;
+    font-weight: 600;
+  }}
+  a {{
+    color: var(--accent);
+    text-decoration: none;
+    transition: color 0.2s ease;
+  }}
+  a:hover {{
+    color: #fff;
   }}
   .grid {{
     display: grid;
@@ -681,13 +813,15 @@ HTML_TEMPLATE = '''\
     margin-bottom: 12px;
     color: #fff;
     letter-spacing: -0.3px;
+    margin-top: 0;
   }}
   .card p {{
     font-size: 14px;
     color: var(--muted);
     line-height: 1.6;
+    margin-bottom: 0;
   }}
-  .btn {{
+  .btn, button, input[type="submit"] {{
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -704,7 +838,7 @@ HTML_TEMPLATE = '''\
     margin-top: 36px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }}
-  .btn:hover {{
+  .btn:hover, button:hover, input[type="submit"]:hover {{
     opacity: 0.9;
     transform: translateY(-1px);
   }}
@@ -729,7 +863,38 @@ HTML_TEMPLATE = '''\
 </html>
 '''
 
-def create_html_page(title: str, body_description: str, filename: str = None) -> str:
+def extract_card_title(text: str) -> tuple:
+    """Dynamically extracts a short, punchy 2-4 word title from a sentence for card headers."""
+    text_clean = text.strip()
+    
+    # If there is a colon or dash in the first 40 chars, use it as a title!
+    if ':' in text_clean[:40]:
+        parts = text_clean.split(':', 1)
+        return parts[0].strip().title(), parts[1].strip()
+    if ' - ' in text_clean[:40]:
+        parts = text_clean.split(' - ', 1)
+        return parts[0].strip().title(), parts[1].strip()
+        
+    # Otherwise, clean the text and extract first few words
+    words = re.findall(r'\b\w{3,12}\b', text_clean)
+    stopwords = {'this', 'that', 'with', 'from', 'have', 'were', 'their', 'there', 'about', 'would', 'could', 'should', 'they', 'what', 'some', 'sweden', 'swedish'}
+    content_words = [w for w in words if w.lower() not in stopwords]
+    
+    if len(content_words) >= 2:
+        title = " ".join(content_words[:3]).title()
+    elif len(words) >= 2:
+        title = " ".join(words[:2]).title()
+    elif words:
+        title = words[0].title()
+    else:
+        title = "Key Feature"
+        
+    if len(title) > 30:
+        title = title[:27] + "..."
+        
+    return title, text_clean
+
+def create_html_page(title: str, body_description: str, filename: str = None, theme_override: str = None) -> str:
     """Creates a modern HTML page from a description and opens it in the browser."""
     import datetime
     if not filename:
@@ -738,62 +903,72 @@ def create_html_page(title: str, body_description: str, filename: str = None) ->
     if not filename.endswith('.html'):
         filename += '.html'
 
-    # Select dynamic theme palette
-    palette = select_theme_palette(title, body_description)
+    # Extract text content (without HTML tags) for theme classification
+    classification_text = re.sub(r'<[^>]+>', '', body_description)
+    palette = select_theme_palette(title, classification_text, theme_override=theme_override)
 
-    # Extract bullet points/paragraphs
-    items = [s.strip() for s in re.split(r'[.!?•\n\-*]\s*', body_description) if len(s.strip()) > 6]
+    # Check if input is raw HTML
+    is_raw_html = bool(re.search(r'<[a-z/][^>]*>', body_description, re.IGNORECASE))
     
-    sections = []
-    sections.append(f'<h1>{title}</h1>')
-    
-    if items:
-        # Check if items[0] needs a period
-        lead_text = items[0]
-        if not lead_text.endswith(('.', '!', '?')):
-            lead_text += '.'
-        sections.append(f'<p class="lead">{lead_text}</p>')
-
-    # Card layout generator
-    card_titles = {
-        'nature': ["Environmental Overview", "Ecological Impact", "Action Plan"],
-        'sunset': ["Concept Highlight", "Vibrant Features", "Strategic Goals"],
-        'space': ["Stellar Mission", "Cosmic Core Technology", "Launch Objectives"],
-        'ocean': ["Deep Dive Analysis", "Strategic Aquatic Currents", "Key Benchmarks"],
-        'gaming': ["Gameplay & Mechanics", "Multiplayer Integration", "Beta Launch Timeline"],
-        'aurora': ["Atmospheric Vibe", "Visual Experience", "Community Roadmap"],
-        'finance': ["Market Analysis", "Investment Strategy", "Revenue Metrics"],
-        'minimal': ["Core Essence", "Design Principles", "Deliverables"],
-        'default': ["Overview & Context", "Key Feature Analysis", "Next Steps"]
-    }
-    
-    theme_titles = card_titles.get(palette['name'], card_titles['default'])
-    grid_cards = []
-    card_index = 1
-    
-    # Render up to 3 cards
-    for line in items[1:]:
-        if len(grid_cards) >= 3:
-            break
-        c_title = theme_titles[card_index - 1] if (card_index - 1) < len(theme_titles) else f"Focus Area {card_index}"
+    if is_raw_html:
+        # Keep original HTML intact but styled under container
+        body_content = body_description
+    else:
+        # Extract bullet points/paragraphs
+        items = [s.strip() for s in re.split(r'[.!?•\n\-*]\s*', body_description) if len(s.strip()) > 6]
         
-        card_body = line
-        if not card_body.endswith(('.', '!', '?')):
-            card_body += '.'
+        sections = []
+        sections.append(f'<h1>{title}</h1>')
+        
+        if items:
+            lead_text = items[0]
+            if not lead_text.endswith(('.', '!', '?')):
+                lead_text += '.'
+            sections.append(f'<p class="lead">{lead_text}</p>')
+
+        # Card layout generator with theme fallback lists
+        card_titles = {
+            'nature': ["Environmental Overview", "Ecological Impact", "Action Plan"],
+            'sunset': ["Concept Highlight", "Vibrant Features", "Strategic Goals"],
+            'space': ["Stellar Mission", "Cosmic Core Technology", "Launch Objectives"],
+            'ocean': ["Deep Dive Analysis", "Strategic Aquatic Currents", "Key Benchmarks"],
+            'gaming': ["Gameplay & Mechanics", "Multiplayer Integration", "Beta Launch Timeline"],
+            'aurora': ["Atmospheric Vibe", "Visual Experience", "Community Roadmap"],
+            'finance': ["Market Analysis", "Investment Strategy", "Revenue Metrics"],
+            'minimal': ["Core Essence", "Design Principles", "Deliverables"],
+            'default': ["Overview & Context", "Key Feature Analysis", "Next Steps"]
+        }
+        
+        theme_titles = card_titles.get(palette['name'], card_titles['default'])
+        grid_cards = []
+        card_index = 1
+        
+        # Render up to 3 cards
+        for line in items[1:]:
+            if len(grid_cards) >= 3:
+                break
             
-        grid_cards.append(f'''  <div class="card">
+            c_title, c_body = extract_card_title(line)
+            # If extracted title is fallback or too wordy, use theme default
+            if c_title == "Key Feature" or len(c_title.split()) > 4:
+                c_title = theme_titles[card_index - 1] if (card_index - 1) < len(theme_titles) else f"Focus Area {card_index}"
+                
+            if not c_body.endswith(('.', '!', '?')):
+                c_body += '.'
+                
+            grid_cards.append(f'''  <div class="card">
     <h2>{c_title}</h2>
-    <p>{card_body}</p>
+    <p>{c_body}</p>
   </div>''')
-        card_index += 1
+            card_index += 1
 
-    if grid_cards:
-        sections.append('<div class="grid">')
-        sections.extend(grid_cards)
-        sections.append('</div>')
+        if grid_cards:
+            sections.append('<div class="grid">')
+            sections.extend(grid_cards)
+            sections.append('</div>')
 
-    sections.append(f'<a class="btn" href="#">Explore {palette["name"].title()} System →</a>')
-    body_content = '\n  '.join(sections)
+        sections.append(f'<a class="btn" href="#">Explore {palette["name"].title()} System →</a>')
+        body_content = '\n  '.join(sections)
 
     html = HTML_TEMPLATE.format(
         title=title,
@@ -1016,6 +1191,139 @@ def open_microsoft_app(app: str, content: str = '', action: str = 'open') -> str
     return json.dumps(result)
 
 
+def adjust_volume(direction: str, amount: int = 10) -> str:
+    """Adjusts system volume. direction can be 'up', 'down', 'mute', 'unmute', or a specific level (0-100)."""
+    try:
+        if IS_WINDOWS:
+            # Try win32 ctypes Virtual Keybd Event (most reliable without external dependencies)
+            try:
+                import ctypes
+                VK_VOLUME_MUTE = 0xAD
+                VK_VOLUME_DOWN = 0xAE
+                VK_VOLUME_UP = 0xAF
+                
+                if direction == 'up':
+                    # Windows volume steps by 2% increments per key event
+                    steps = max(1, amount // 2)
+                    for _ in range(steps):
+                        ctypes.windll.user32.keybd_event(VK_VOLUME_UP, 0, 0, 0)
+                        ctypes.windll.user32.keybd_event(VK_VOLUME_UP, 0, 2, 0)
+                    return f"Volume increased by {steps * 2}%."
+                elif direction == 'down':
+                    steps = max(1, amount // 2)
+                    for _ in range(steps):
+                        ctypes.windll.user32.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
+                        ctypes.windll.user32.keybd_event(VK_VOLUME_DOWN, 0, 2, 0)
+                    return f"Volume decreased by {steps * 2}%."
+                elif direction in ('mute', 'unmute'):
+                    ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
+                    return "Volume mute toggled."
+            except Exception as e:
+                # Fallback to PyAutoGUI
+                if HAS_PYAUTOGUI:
+                    if direction == 'up':
+                        pyautogui.press('volumeup')
+                    elif direction == 'down':
+                        pyautogui.press('volumedown')
+                    elif direction in ('mute', 'unmute'):
+                        pyautogui.press('volumemute')
+                    return f"Volume adjusted via PyAutoGUI: {direction}."
+                return f"Failed Windows volume control: {str(e)}"
+        else:
+            # macOS AppleScript volume control (absolute precision)
+            if direction == 'up':
+                cmd = f'osascript -e "set volume output volume ((output volume of (get volume settings)) + {amount})"'
+            elif direction == 'down':
+                cmd = f'osascript -e "set volume output volume ((output volume of (get volume settings)) - {amount})"'
+            elif direction == 'mute':
+                cmd = 'osascript -e "set volume with output muted"'
+            elif direction == 'unmute':
+                cmd = 'osascript -e "set volume without output muted"'
+            elif direction.isdigit():
+                val = max(0, min(100, int(direction)))
+                cmd = f'osascript -e "set volume output volume {val}"'
+            else:
+                return "Unknown volume command."
+            
+            subprocess.run(cmd, shell=True, check=True)
+            return f"Volume adjusted successfully on macOS: {direction}."
+    except Exception as e:
+        return f"Volume error: {str(e)}"
+
+
+def adjust_media(action: str) -> str:
+    """Controls media playbacks (play, pause, next, previous)."""
+    try:
+        action = action.lower().strip()
+        if IS_WINDOWS:
+            # VK_MEDIA_NEXT_TRACK = 0xB0, VK_MEDIA_PREV_TRACK = 0xB1, VK_MEDIA_PLAY_PAUSE = 0xB3
+            try:
+                import ctypes
+                VK_MEDIA_NEXT_TRACK = 0xB0
+                VK_MEDIA_PREV_TRACK = 0xB1
+                VK_MEDIA_PLAY_PAUSE = 0xB3
+                
+                if action in ('play', 'pause', 'toggle', 'play/pause', 'playpause'):
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 2, 0)
+                    return "Media play/pause toggled via win32 API."
+                elif action in ('next', 'skip', 'forward'):
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
+                    return "Skipped to next track via win32 API."
+                elif action in ('prev', 'previous', 'back'):
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 2, 0)
+                    return "Went to previous track via win32 API."
+            except Exception as e:
+                # Fallback to PyAutoGUI
+                if HAS_PYAUTOGUI:
+                    if action in ('play', 'pause', 'toggle', 'play/pause', 'playpause'):
+                        pyautogui.press('playpause')
+                    elif action in ('next', 'skip', 'forward'):
+                        pyautogui.press('nexttrack')
+                    elif action in ('prev', 'previous', 'back'):
+                        pyautogui.press('prevtrack')
+                    return f"Media command '{action}' simulated via PyAutoGUI."
+                return f"Failed Windows media control: {str(e)}"
+        else:
+            # macOS media controls using System Events (generic)
+            try:
+                if action in ('play', 'pause', 'toggle', 'play/pause', 'playpause'):
+                    # Key code 16 is Play/Pause media key on macOS
+                    cmd = "osascript -e 'tell application \"System Events\" to key code 16'"
+                elif action in ('next', 'skip', 'forward'):
+                    # Key code 19 is Next media key on macOS
+                    cmd = "osascript -e 'tell application \"System Events\" to key code 19'"
+                elif action in ('prev', 'previous', 'back'):
+                    # Key code 18 is Previous media key on macOS
+                    cmd = "osascript -e 'tell application \"System Events\" to key code 18'"
+                else:
+                    return "Unknown media command."
+                
+                subprocess.run(cmd, shell=True, check=True)
+                return f"Media control executed on macOS via System Events: {action}."
+            except Exception as e:
+                # Fallback to direct application control (does not require keystroke permissions)
+                try:
+                    if action in ('play', 'pause', 'toggle', 'play/pause', 'playpause'):
+                        direct_cmd = "osascript -e 'if application \"Spotify\" is running then run script \"tell application \\\"Spotify\\\" to playpause\"' -e 'if application \"Music\" is running then run script \"tell application \\\"Music\\\" to playpause\"'"
+                    elif action in ('next', 'skip', 'forward'):
+                        direct_cmd = "osascript -e 'if application \"Spotify\" is running then run script \"tell application \\\"Spotify\\\" to next track\"' -e 'if application \"Music\" is running then run script \"tell application \\\"Music\\\" to next track\"'"
+                    elif action in ('prev', 'previous', 'back'):
+                        direct_cmd = "osascript -e 'if application \"Spotify\" is running then run script \"tell application \\\"Spotify\\\" to previous track\"' -e 'if application \"Music\" is running then run script \"tell application \\\"Music\\\" to previous track\"'"
+                    else:
+                        return "Unknown media command."
+                    
+                    subprocess.run(direct_cmd, shell=True, check=True)
+                    return f"Media control executed on macOS via direct player fallback (Spotify/Music): {action}."
+                except Exception as fallback_err:
+                    return f"Media control error: {str(e)} (Fallback error: {str(fallback_err)})"
+    except Exception as e:
+        return f"Media control error: {str(e)}"
+
+
 SUB_AGENT_TYPES = {
     'researcher': ('🔬', 'Research & Search Agent'),
     'creator':    ('🎨', 'Content Creation Agent'),
@@ -1140,6 +1448,10 @@ async def process_prompt(prompt_text):
         matched_intent = "microsoft_app"
     elif any(k in prompt_lower for k in ["multi agent", "multi-agent", "multiple agents", "orchestrate", "spawn agents", "run agents", "agent pipeline"]):
         matched_intent = "multi_agent"
+    elif any(k in prompt_lower for k in ["volume up", "volume down", "increase volume", "decrease volume", "turn up volume", "turn down volume", "mute volume", "unmute volume", "mute", "unmute", "set volume", "make it louder", "make it quieter"]):
+        matched_intent = "volume_control"
+    elif any(k in prompt_lower for k in ["next song", "skip song", "previous song", "next track", "previous track", "skip track", "pause music", "pause song", "resume music", "resume song", "play/pause", "play pause", "stop music", "play next", "play previous", "media play", "media pause", "media next", "media prev", "pause", "resume", "skip"]):
+        matched_intent = "media_control"
     # ── Existing rules ──
     elif "open browser" in prompt_lower or "open website" in prompt_lower or "chrome" in prompt_lower or "google.com" in prompt_lower or "github.com" in prompt_lower:
         matched_intent = "browser"
@@ -1829,7 +2141,88 @@ async def process_prompt(prompt_text):
             "\n\n✅ All agents finished successfully."
         )
 
+    elif matched_intent == "volume_control":
+        # Parse direction & amount
+        direction = 'up'
+        amount = 10
         
+        if 'unmute' in prompt_lower:
+            direction = 'unmute'
+        elif 'mute' in prompt_lower:
+            direction = 'mute'
+        elif 'down' in prompt_lower or 'decrease' in prompt_lower or 'lower' in prompt_lower or 'quieter' in prompt_lower:
+            direction = 'down'
+            nums = re.findall(r'\d+', prompt_text)
+            if nums:
+                amount = int(nums[0])
+        elif 'up' in prompt_lower or 'increase' in prompt_lower or 'higher' in prompt_lower or 'louder' in prompt_lower:
+            direction = 'up'
+            nums = re.findall(r'\d+', prompt_text)
+            if nums:
+                amount = int(nums[0])
+        elif 'set' in prompt_lower or 'to' in prompt_lower:
+            nums = re.findall(r'\d+', prompt_text)
+            if nums:
+                direction = str(nums[0])
+                
+        print(json.dumps({"type": "thought", "text": f"System Volume Control: processing '{direction}' adjustment...\n"}), flush=True)
+        await asyncio.sleep(0.2)
+        
+        # Spawn Volume Subagent
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_volume",
+            "description": f"🔊 Volume Control: {direction.title() if not direction.isdigit() else direction + '%'}",
+        }), flush=True)
+        await asyncio.sleep(0.3)
+        
+        # Tool call
+        print(json.dumps({"type": "tool_call", "name": "adjust_volume", "args": {"direction": direction, "amount": amount}}), flush=True)
+        volume_res = adjust_volume(direction, amount)
+        await asyncio.sleep(0.4)
+        print(json.dumps({"type": "tool_done", "result": volume_res}), flush=True)
+        
+        final_reply = (
+            f"🔊 **System Volume Control**\n\n"
+            f"Command: {prompt_text}\n"
+            f"Result: {volume_res} ✅"
+        )
+
+    elif matched_intent == "media_control":
+        # Parse action
+        action = 'play'
+        if 'next' in prompt_lower or 'skip' in prompt_lower or 'forward' in prompt_lower:
+            action = 'next'
+        elif 'prev' in prompt_lower or 'back' in prompt_lower:
+            action = 'prev'
+        elif 'pause' in prompt_lower or 'stop' in prompt_lower:
+            action = 'pause'
+        elif 'play' in prompt_lower or 'resume' in prompt_lower:
+            action = 'play'
+            
+        print(json.dumps({"type": "thought", "text": f"System Media Control: simulating media {action} command...\n"}), flush=True)
+        await asyncio.sleep(0.2)
+        
+        # Spawn Media Subagent
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_media",
+            "description": f"🎵 Media Control: {action.title()}",
+        }), flush=True)
+        await asyncio.sleep(0.3)
+        
+        # Tool call
+        print(json.dumps({"type": "tool_call", "name": "adjust_media", "args": {"action": action}}), flush=True)
+        media_res = adjust_media(action)
+        await asyncio.sleep(0.4)
+        print(json.dumps({"type": "tool_done", "result": media_res}), flush=True)
+        
+        final_reply = (
+            f"🎵 **System Media Control**\n\n"
+            f"Command: {prompt_text}\n"
+            f"Result: {media_res} ✅"
+        )
+
     else: # qa_search
         # Search the local documentation database using TF-IDF
         print(json.dumps({"type": "thought", "text": f"Querying local index for: '{prompt_text}'...\n"}), flush=True)
