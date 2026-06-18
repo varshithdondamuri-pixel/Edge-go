@@ -486,6 +486,113 @@ def web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return json.dumps({'query': query, 'results': [], 'error': str(e)})
 
+def summarize_text(snippets: list) -> str:
+    """Offline simple sentence ranker based on word frequency."""
+    if not snippets:
+        return "No search results available to summarize."
+    
+    text = " ".join(snippets)
+    # Simple word counting
+    words = re.findall(r'\b\w{4,15}\b', text.lower())
+    # Remove common short words/stopwords
+    stopwords = {'with', 'from', 'this', 'that', 'they', 'have', 'were', 'their', 'there', 'about', 'would', 'could', 'should'}
+    words = [w for w in words if w not in stopwords]
+    
+    freq = {}
+    for w in words:
+        freq[w] = freq.get(w, 0) + 1
+        
+    # Split sentences
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    scored_sentences = []
+    
+    for sent in sentences:
+        if len(sent.strip()) < 15:
+            continue
+        score = 0
+        sent_words = re.findall(r'\b\w{4,15}\b', sent.lower())
+        for w in sent_words:
+            if w in freq:
+                score += freq[w]
+        # Normalize by length to prevent very long sentences from dominating
+        score = score / max(len(sent_words), 1)
+        scored_sentences.append((score, sent))
+        
+    # Sort and take top 3
+    scored_sentences.sort(key=lambda x: x[0], reverse=True)
+    top_sents = [s[1] for s in scored_sentences[:3]]
+    
+    summary = " ".join(top_sents)
+    if not summary:
+        summary = text[:200] + "..."
+    return summary
+
+def select_theme_palette(title: str, description: str) -> dict:
+    """Classifies title and description into an aesthetic dark theme palette."""
+    text = (title + " " + description).lower()
+    
+    # Keyword classification map
+    themes = {
+        'nature': {
+            'keywords': ['nature', 'forest', 'green', 'leaf', 'garden', 'plant', 'tree', 'eco', 'organic', 'agriculture', 'earth'],
+            'accent': '#22c55e', 'bg': '#022c22', 'surface': '#064e3b', 'border': 'rgba(34, 197, 94, 0.15)', 'text': '#f0fdf4', 'muted': '#a7f3d0'
+        },
+        'sunset': {
+            'keywords': ['sunset', 'orange', 'red', 'sun', 'fire', 'burn', 'autumn', 'summer', 'warm', 'beach', 'sand', 'desert'],
+            'accent': '#f97316', 'bg': '#18080f', 'surface': '#2d0f1a', 'border': 'rgba(249, 115, 22, 0.15)', 'text': '#fff7ed', 'muted': '#ffedd5'
+        },
+        'space': {
+            'keywords': ['space', 'galaxy', 'star', 'planet', 'cosmic', 'universe', 'stellar', 'neon', 'cyberpunk', 'purple', 'neon pink'],
+            'accent': '#d946ef', 'bg': '#030712', 'surface': '#111827', 'border': 'rgba(217, 70, 239, 0.15)', 'text': '#fdf4ff', 'muted': '#f5d0fe'
+        },
+        'ocean': {
+            'keywords': ['ocean', 'sea', 'blue', 'water', 'wave', 'deep', 'aquatic', 'fish', 'aqua', 'teal', 'marine', 'beach'],
+            'accent': '#06b6d4', 'bg': '#082f49', 'surface': '#0c4a6e', 'border': 'rgba(6, 182, 212, 0.15)', 'text': '#ecfeff', 'muted': '#cffafe'
+        },
+        'gaming': {
+            'keywords': ['gaming', 'game', 'play', 'console', 'xbox', 'playstation', 'lava', 'cyber', 'stream', 'twitch', 'action', 'esport'],
+            'accent': '#ef4444', 'bg': '#09090b', 'surface': '#18181b', 'border': 'rgba(239, 68, 68, 0.15)', 'text': '#fafafa', 'muted': '#d4d4d8'
+        },
+        'aurora': {
+            'keywords': ['aurora', 'mint', 'sky', 'night', 'polar', 'teal', 'northern', 'glow', 'emerald', 'chill', 'calm'],
+            'accent': '#2dd4bf', 'bg': '#020617', 'surface': '#0f172a', 'border': 'rgba(45, 212, 191, 0.15)', 'text': '#f0fdfa', 'muted': '#ccfbf1'
+        },
+        'finance': {
+            'keywords': ['finance', 'stock', 'money', 'crypto', 'bitcoin', 'emerald', 'bank', 'invest', 'wealth', 'trading', 'profit'],
+            'accent': '#10b981', 'bg': '#061a12', 'surface': '#0a2f21', 'border': 'rgba(16, 185, 129, 0.15)', 'text': '#ecfdf5', 'muted': '#a7f3d0'
+        },
+        'minimal': {
+            'keywords': ['minimal', 'clean', 'simple', 'white', 'black', 'gray', 'slate', 'portfolio', 'personal', 'cv', 'resume'],
+            'accent': '#94a3b8', 'bg': '#000000', 'surface': '#0c0a09', 'border': 'rgba(255, 255, 255, 0.08)', 'text': '#f5f5f4', 'muted': '#a8a29e'
+        }
+    }
+    
+    # Find matching theme
+    matched_theme = 'default'
+    max_matches = 0
+    for theme_name, theme_data in themes.items():
+        matches = sum(1 for kw in theme_data['keywords'] if kw in text)
+        if matches > max_matches:
+            max_matches = matches
+            matched_theme = theme_name
+            
+    if matched_theme == 'default':
+        # Premium royal indigo default theme
+        return {
+            'name': 'default',
+            'accent': '#7c6af7',
+            'bg': '#0a0a0f',
+            'surface': '#111118',
+            'border': 'rgba(255,255,255,0.08)',
+            'text': '#f0f0ff',
+            'muted': 'rgba(255,255,255,0.5)',
+            'gradient': 'linear-gradient(135deg, #7c6af7 0%, #a855f7 100%)'
+        }
+    else:
+        palette = themes[matched_theme]
+        palette['name'] = matched_theme
+        palette['gradient'] = f"linear-gradient(135deg, {palette['accent']} 0%, color-mix(in srgb, {palette['accent']} 60%, #ffffff) 100%)"
+        return palette
 
 HTML_TEMPLATE = '''\
 <!DOCTYPE html>
@@ -497,71 +604,88 @@ HTML_TEMPLATE = '''\
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
-    --accent: #7c6af7;
-    --bg: #0a0a0f;
-    --surface: #111118;
-    --border: rgba(255,255,255,0.08);
-    --text: #f0f0ff;
-    --muted: rgba(255,255,255,0.5);
+    --accent: {accent};
+    --bg: {bg};
+    --surface: {surface};
+    --border: {border};
+    --text: {text};
+    --muted: {muted};
+    --gradient: {gradient};
   }}
   body {{
-    font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
-    padding: 40px 24px;
+    padding: 60px 24px;
+    line-height: 1.5;
+    transition: background 0.3s ease;
   }}
   .container {{
-    max-width: 860px;
+    max-width: 960px;
     margin: 0 auto;
   }}
   .badge {{
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: rgba(124,106,247,0.15);
-    border: 1px solid rgba(124,106,247,0.3);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
     color: var(--accent);
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 4px 12px;
+    letter-spacing: 0.08em;
+    padding: 5px 12px;
     border-radius: 20px;
     margin-bottom: 24px;
+    text-transform: uppercase;
   }}
   h1 {{
-    font-size: clamp(28px, 5vw, 48px);
+    font-size: clamp(32px, 6vw, 54px);
     font-weight: 800;
-    letter-spacing: -1px;
-    margin-bottom: 16px;
-    background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+    letter-spacing: -1.5px;
+    margin-bottom: 20px;
+    background: var(--gradient);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
+    line-height: 1.1;
   }}
   p.lead {{
-    font-size: 17px;
+    font-size: 18px;
     color: var(--muted);
     line-height: 1.6;
     margin-bottom: 40px;
-    max-width: 640px;
+    max-width: 720px;
+  }}
+  .grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+    margin-top: 32px;
   }}
   .card {{
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 28px;
-    margin-bottom: 20px;
+    border-radius: 18px;
+    padding: 30px;
+    transition: transform 0.25s cubic-bezier(0.1, 0.8, 0.3, 1), border-color 0.25s ease;
+  }}
+  .card:hover {{
+    transform: translateY(-4px);
+    border-color: rgba(255,255,255,0.18);
   }}
   .card h2 {{
-    font-size: 18px;
+    font-size: 19px;
     font-weight: 700;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    color: #fff;
+    letter-spacing: -0.3px;
   }}
   .card p {{
     font-size: 14px;
     color: var(--muted);
-    line-height: 1.65;
+    line-height: 1.6;
   }}
   .btn {{
     display: inline-flex;
@@ -571,29 +695,35 @@ HTML_TEMPLATE = '''\
     color: #fff;
     font-size: 14px;
     font-weight: 600;
-    padding: 12px 24px;
-    border-radius: 10px;
+    padding: 14px 28px;
+    border-radius: 12px;
     border: none;
     cursor: pointer;
     text-decoration: none;
-    transition: opacity 0.15s;
-    margin-top: 24px;
+    transition: opacity 0.15s, transform 0.15s;
+    margin-top: 36px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }}
-  .btn:hover {{ opacity: 0.85; }}
+  .btn:hover {{
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }}
   footer {{
     text-align: center;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--muted);
-    margin-top: 60px;
-    opacity: 0.5;
+    margin-top: 80px;
+    opacity: 0.4;
+    border-top: 1px solid var(--border);
+    padding-top: 24px;
   }}
 </style>
 </head>
 <body>
 <div class="container">
-  <div class="badge">⚡ Created by Clicky Agent</div>
+  <div class="badge">⚡ Created by Clicky AI Offline Agent</div>
   {body_content}
-  <footer>Generated by Edge Go Agent • {timestamp}</footer>
+  <footer>Generated by Edge Go AI Agent • {timestamp}</footer>
 </div>
 </body>
 </html>
@@ -608,23 +738,74 @@ def create_html_page(title: str, body_description: str, filename: str = None) ->
     if not filename.endswith('.html'):
         filename += '.html'
 
-    # Generate body content from description
-    # Build smart HTML from description keywords
+    # Select dynamic theme palette
+    palette = select_theme_palette(title, body_description)
+
+    # Extract bullet points/paragraphs
+    items = [s.strip() for s in re.split(r'[.!?•\n\-*]\s*', body_description) if len(s.strip()) > 6]
+    
     sections = []
-    lines = [l.strip() for l in body_description.split('.') if len(l.strip()) > 5]
     sections.append(f'<h1>{title}</h1>')
-    if lines:
-        sections.append(f'<p class="lead">{lines[0]}</p>')
-    # Build cards from remaining content
-    for i, line in enumerate(lines[1:4]):
-        sections.append(f'<div class="card"><h2>Section {i+1}</h2><p>{line}</p></div>')
-    sections.append('<a class="btn" href="#">Get Started →</a>')
+    
+    if items:
+        # Check if items[0] needs a period
+        lead_text = items[0]
+        if not lead_text.endswith(('.', '!', '?')):
+            lead_text += '.'
+        sections.append(f'<p class="lead">{lead_text}</p>')
+
+    # Card layout generator
+    card_titles = {
+        'nature': ["Environmental Overview", "Ecological Impact", "Action Plan"],
+        'sunset': ["Concept Highlight", "Vibrant Features", "Strategic Goals"],
+        'space': ["Stellar Mission", "Cosmic Core Technology", "Launch Objectives"],
+        'ocean': ["Deep Dive Analysis", "Strategic Aquatic Currents", "Key Benchmarks"],
+        'gaming': ["Gameplay & Mechanics", "Multiplayer Integration", "Beta Launch Timeline"],
+        'aurora': ["Atmospheric Vibe", "Visual Experience", "Community Roadmap"],
+        'finance': ["Market Analysis", "Investment Strategy", "Revenue Metrics"],
+        'minimal': ["Core Essence", "Design Principles", "Deliverables"],
+        'default': ["Overview & Context", "Key Feature Analysis", "Next Steps"]
+    }
+    
+    theme_titles = card_titles.get(palette['name'], card_titles['default'])
+    grid_cards = []
+    card_index = 1
+    
+    # Render up to 3 cards
+    for line in items[1:]:
+        if len(grid_cards) >= 3:
+            break
+        c_title = theme_titles[card_index - 1] if (card_index - 1) < len(theme_titles) else f"Focus Area {card_index}"
+        
+        card_body = line
+        if not card_body.endswith(('.', '!', '?')):
+            card_body += '.'
+            
+        grid_cards.append(f'''  <div class="card">
+    <h2>{c_title}</h2>
+    <p>{card_body}</p>
+  </div>''')
+        card_index += 1
+
+    if grid_cards:
+        sections.append('<div class="grid">')
+        sections.extend(grid_cards)
+        sections.append('</div>')
+
+    sections.append(f'<a class="btn" href="#">Explore {palette["name"].title()} System →</a>')
     body_content = '\n  '.join(sections)
 
     html = HTML_TEMPLATE.format(
         title=title,
         body_content=body_content,
-        timestamp=datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        timestamp=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        accent=palette['accent'],
+        bg=palette['bg'],
+        surface=palette['surface'],
+        border=palette['border'],
+        text=palette['text'],
+        muted=palette['muted'],
+        gradient=palette['gradient']
     )
 
     # Save to Desktop
@@ -1299,9 +1480,16 @@ async def process_prompt(prompt_text):
 
         results_list = search_data.get('results', [])
         if results_list:
+            # Generate AI Summary offline
+            snippets = [r['snippet'] for r in results_list if r.get('snippet')]
+            summary = summarize_text(snippets)
+            
             lines = [f"{r['rank']}. **{r['title']}**\n   {r['snippet']}\n   🔗 {r['url']}" for r in results_list]
             final_reply = (
-                f"🌐 **Web Search Results for:** *\"{query}\"*\n\n" +
+                f"🌐 **Web Search Results for:** *\"{query}\"*\n\n"
+                f"💡 **AI Summary & Insights:**\n"
+                f"{summary}\n\n"
+                f"**Top Web Results:**\n" +
                 "\n\n".join(lines)
             )
         else:
@@ -1384,12 +1572,80 @@ async def process_prompt(prompt_text):
         if not filename:
             filename = 'clicky_document'
 
-        # Content after colon
-        content = f"Document created by Clicky Agent.\nTask: {prompt_text}\n"
-        if ':' in prompt_text:
-            content = prompt_text.split(':', 1)[1].strip()
+        # Check if the user is asking to search and write/compile into a doc
+        is_search_write = False
+        search_query = None
+        
+        if any(k in prompt_lower for k in ['search', 'find online', 'look up', 'google', 'query']):
+            search_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)([\w\s\-_.]+?)\s+(?:and\s+)?(create|make|save|write|compile|export)', prompt_text, re.IGNORECASE)
+            if search_match:
+                search_query = search_match.group(2).strip().strip('"').strip("'")
+                is_search_write = True
+            else:
+                parts = re.split(r'\b(?:and\s+)?(?:create|make|save|write|compile|export)\b', prompt_text, flags=re.I)
+                if len(parts) > 1:
+                    sq_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(?:for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)(.+)', parts[0], re.IGNORECASE)
+                    if sq_match:
+                        search_query = sq_match.group(1).strip()
+                        is_search_write = True
 
-        print(json.dumps({"type": "thought", "text": f"Creating {doc_type.upper()} document: '{filename}'...\n"}), flush=True)
+        import datetime
+        summary = ""
+        
+        if is_search_write and search_query:
+            print(json.dumps({"type": "thought", "text": f"Combined workflow detected. Initiating web search for: '{search_query}'...\n"}), flush=True)
+            await asyncio.sleep(0.25)
+            
+            # Spawn search subagent
+            print(json.dumps({"type": "subagent_start", "id": "sub_search", "description": f"🔍 Search: '{search_query}'"}), flush=True)
+            await asyncio.sleep(0.3)
+            
+            # Search DDG/Bing
+            print(json.dumps({"type": "tool_call", "name": "web_search", "args": {"query": search_query}}), flush=True)
+            search_raw = web_search(search_query, max_results=5)
+            await asyncio.sleep(0.4)
+            search_data = json.loads(search_raw)
+            results_list = search_data.get('results', [])
+            print(json.dumps({"type": "tool_done", "result": f"Found {len(results_list)} sources"}), flush=True)
+            
+            # Summarize results
+            print(json.dumps({"type": "thought", "text": "Analysing search results and compiling AI summary report...\n"}), flush=True)
+            await asyncio.sleep(0.3)
+            print(json.dumps({"type": "subagent_start", "id": "sub_summary", "description": "🔬 AI Analyst: Summarize search results"}), flush=True)
+            await asyncio.sleep(0.4)
+            
+            snippets = [r['snippet'] for r in results_list if r.get('snippet')]
+            summary = summarize_text(snippets)
+            print(json.dumps({"type": "tool_done", "result": "AI Summary generated successfully"}), flush=True)
+            
+            # Format report content
+            if doc_type == 'xlsx' or doc_type == 'csv':
+                content_lines = ["Rank,Title,Snippet,URL"]
+                for r in results_list:
+                    t_safe = r['title'].replace(',', ' ').replace('\n', ' ')
+                    s_safe = r['snippet'].replace(',', ' ').replace('\n', ' ')
+                    content_lines.append(f"{r['rank']},{t_safe},{s_safe},{r['url']}")
+                content_lines.append("")
+                content_lines.append(f"AI Summary,{summary.replace(',', ' ').replace('\n', ' ')},,")
+                content = "\n".join(content_lines)
+            else:
+                report = []
+                report.append(f"# Search & Analysis Report: {search_query.title()}")
+                report.append(f"Generated by Clicky Offline AI Agent on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                report.append("## Executive Summary")
+                report.append(summary)
+                report.append("\n## Top Web Search Findings")
+                for r in results_list:
+                    report.append(f"{r['rank']}. **{r['title']}**")
+                    report.append(f"   *Snippet:* {r['snippet']}")
+                    report.append(f"   *Source:* {r['url']}\n")
+                content = "\n".join(report)
+        else:
+            content = f"Document created by Clicky Agent.\nTask: {prompt_text}\n"
+            if ':' in prompt_text:
+                content = prompt_text.split(':', 1)[1].strip()
+
+        print(json.dumps({"type": "thought", "text": f"Writing {doc_type.upper()} document: '{filename}'...\n"}), flush=True)
         await asyncio.sleep(0.2)
 
         print(json.dumps({"type": "subagent_start", "id": "sub_doc_creator",
@@ -1404,13 +1660,24 @@ async def process_prompt(prompt_text):
         print(json.dumps({"type": "tool_done", "result": doc_data.get('file', ''),
                           "extra": {"file": doc_data.get('file'), "type": doc_type}}), flush=True)
 
-        final_reply = (
-            f"📄 **Document Created**\n\n"
-            f"**Type:** {doc_type.upper()}\n"
-            f"**File:** `{doc_data.get('file', 'Documents folder')}` \n"
-            f"**Size:** {doc_data.get('size_bytes', 0)} bytes\n"
-            f"**Status:** Opened with default application ✅"
-        )
+        if is_search_write and search_query:
+            final_reply = (
+                f"📄 **AI Report Compiled Successfully**\n\n"
+                f"**Topic:** {search_query.title()}\n"
+                f"**Format:** {doc_type.upper()}\n"
+                f"**File:** `{doc_data.get('file')}` ✅\n\n"
+                f"💡 **AI Summary & Highlights:**\n"
+                f"{summary}\n\n"
+                f"All search findings have been compiled into the file."
+            )
+        else:
+            final_reply = (
+                f"📄 **Document Created**\n\n"
+                f"**Type:** {doc_type.upper()}\n"
+                f"**File:** `{doc_data.get('file', 'Documents folder')}` \n"
+                f"**Size:** {doc_data.get('size_bytes', 0)} bytes\n"
+                f"**Status:** Opened with default application ✅"
+            )
         print(json.dumps({"type": "file_created", "file": doc_data.get('file'), "file_type": doc_type}), flush=True)
 
     elif matched_intent == "play_video":
