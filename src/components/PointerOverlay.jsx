@@ -11,20 +11,20 @@ export default function PointerOverlay() {
 
     const unsubscribe = window.electronAPI.onAgentMsg((data) => {
       if (data.type === 'pointer_animation') {
-        const { x, y } = data
-        triggerPointerMove(x, y)
+        const { x, y, startX, startY } = data
+        triggerPointerMove(x, y, startX, startY)
       }
     })
 
     return () => unsubscribe()
   }, [])
 
-  const triggerPointerMove = (targetX, targetY) => {
+  const triggerPointerMove = (targetX, targetY, providedStartX, providedStartY) => {
     setActionText('AI Agent: Clicking...')
     setPointer((prev) => ({ ...prev, visible: true }))
 
-    const startX = cursorRef.current.x
-    const startY = cursorRef.current.y
+    const startX = providedStartX !== undefined ? providedStartX : cursorRef.current.x
+    const startY = providedStartY !== undefined ? providedStartY : cursorRef.current.y
     const duration = 1200 // ms
     const startTime = performance.now()
 

@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openSettings: (tab) => ipcRenderer.send('open-settings', tab),
   closeSettings: () => ipcRenderer.send('close-settings'),
   setControlCenter: (isOpen) => ipcRenderer.send('set-control-center', isOpen),
+  setControlCenterDocked: (docked) => ipcRenderer.send('set-control-center-docked', docked),
+  setPanelLocked: (locked) => ipcRenderer.send('set-panel-locked', locked),
   setSystemControl: (control, value) => ipcRenderer.invoke('set-system-control', control, value),
   setBrightness: (level) => ipcRenderer.invoke('set-system-control', 'brightness', level),
   setDND: (enabled) => ipcRenderer.invoke('set-system-control', 'dnd', enabled),

@@ -18,7 +18,7 @@ const {
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
-const { exec } = require('child_process')
+const { exec, spawn } = require('child_process')
 
 const isDev = !app.isPackaged
 
@@ -63,6 +63,8 @@ const notchState = {
   expandedWidth: 620,
   state: 'merged',
   controlCenterOpen: false,
+  controlCenterDocked: false,
+  panelLocked: false,
 }
 
 const systemControlState = {
@@ -80,7 +82,7 @@ const windowSettingsState = {
   enableWindowShadow: true,
 }
 
-const NOTCH_MERGED_HEIGHT = 16
+const NOTCH_MERGED_HEIGHT = 36
 const NOTCH_COLLAPSED_HEIGHT = 48
 const NOTCH_EXPANDED_HEIGHT = 240
 
@@ -188,7 +190,9 @@ function applyNotchBounds(animate = true) {
   const display = screen.getPrimaryDisplay()
   const sw = display.workArea.width
   const sh = display.workArea.height
-  const notchY = display.workArea.y
+  // Use bounds.y (full-screen top) so the notch always anchors at y=0
+  // on Windows with a bottom taskbar (workArea.y is 0 but bounds.y is always the physical top)
+  const notchY = display.bounds.y
 
   if (boundsTimeout) {
     clearTimeout(boundsTimeout)
@@ -196,9 +200,26 @@ function applyNotchBounds(animate = true) {
   }
 
   if (notchState.controlCenterOpen) {
-    mainWindow.setBounds({ width: sw, height: sh, x: 0, y: notchY }, false)
+    if (notchState.controlCenterDocked) {
+      const panelWidth = 740
+      const panelHeight = Math.min(600, sh - 20)
+      const x = Math.max(0, sw - panelWidth - 16)
+      mainWindow.setBounds({ width: panelWidth, height: panelHeight, x, y: notchY }, false)
+    } else {
+      mainWindow.setBounds({ width: sw, height: sh, x: 0, y: notchY }, false)
+    }
     mainWindow.setIgnoreMouseEvents(false)
+    // Make window focusable so sliders/inputs work inside the Control Center
+    if (!mainWindow.isFocusable()) {
+      mainWindow.setFocusable(true)
+    }
+    mainWindow.focus()
     return
+  }
+  // Control Center closed — restore click-through for the notch
+  mainWindow.setIgnoreMouseEvents(false) // notch still needs hover
+  if (mainWindow.isFocusable()) {
+    mainWindow.setFocusable(false)
   }
 
   let width = notchState.collapsedWidth
@@ -249,13 +270,15 @@ function sanitizeSettings(settings = {}) {
 
 function createWindow() {
   const display = screen.getPrimaryDisplay()
-  const width = display.workArea.width
-  const notchY = display.workArea.y
+  const sw = display.workArea.width
+  // On Windows with taskbar at bottom, workArea.y is 0.
+  // Use bounds.y (full screen top) so the notch always anchors at y=0
+  const notchY = display.bounds.y
 
   mainWindow = new BrowserWindow({
-    width: 140,
-    height: NOTCH_MERGED_HEIGHT,
-    x: getNotchX(width, 140),
+    width: notchState.collapsedWidth,
+    height: NOTCH_COLLAPSED_HEIGHT,
+    x: getNotchX(sw, notchState.collapsedWidth),
     y: notchY,
     frame: false,
     transparent: true,
@@ -267,6 +290,8 @@ function createWindow() {
     movable: true,
     hasShadow: false,
     show: false,
+    // Start non-focusable so notch doesn't steal focus.
+    // We toggle focusable=true when Control Center opens.
     focusable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -290,12 +315,21 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
     mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    // setVisibleOnAllWorkspaces is macOS-only — skip on Windows to avoid errors
+    if (process.platform !== 'win32') {
+      try { mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) } catch {}
+    }
+    // Ensure correct initial bounds after renderer loads
+    applyNotchBounds(false)
   })
 
   mainWindow.on('blur', () => {
     if (mainWindow && !mainWindow.isDestroyed() && windowSettingsState.alwaysOnTop) {
       mainWindow.setAlwaysOnTop(true, 'screen-saver')
+    }
+    // When window loses focus and CC is not open, restore non-focusable mode
+    if (!notchState.controlCenterOpen) {
+      try { mainWindow.setFocusable(false) } catch {}
     }
   })
 
@@ -1548,8 +1582,26 @@ ipcMain.on('set-control-center', (_, isOpen) => {
   // dismisses (350 ms delay). This prevents a race
   // where the window snaps to collapsed while CC is
   // still animating out.
-  if (isOpen) notchState.state = 'expanded'
+  if (isOpen) {
+    notchState.state = 'expanded'
+    // Make window focusable so sliders/inputs work in the Control Center
+    try { mainWindow.setFocusable(true) } catch {}
+  } else {
+    // Restore non-focusable so the notch bar doesn't steal window focus
+    try { mainWindow.setFocusable(false) } catch {}
+  }
   applyNotchBounds(true)
+})
+
+ipcMain.on('set-control-center-docked', (_, docked) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  notchState.controlCenterDocked = !!docked
+  applyNotchBounds(true)
+})
+
+ipcMain.on('set-panel-locked', (_, locked) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  notchState.panelLocked = !!locked
 })
 
 ipcMain.on('set-always-on-top', (_, value) => {
@@ -1677,7 +1729,8 @@ function startAgentDaemon() {
     console.warn('[Agent Daemon] Error loading local .env:', e.message)
   }
 
-  agentProcess = spawn(pythonCmd, [daemonPath], {
+  envCopy.PYTHONUNBUFFERED = '1'
+  agentProcess = spawn(pythonCmd, ['-u', daemonPath], {
     env: envCopy
   })
 
@@ -1701,6 +1754,9 @@ function startAgentDaemon() {
           }
         } else if (payload.type === 'pointer_animation') {
           if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+            const cursor = screen.getCursorScreenPoint()
+            payload.startX = cursor.x
+            payload.startY = cursor.y
             pointerOverlayWindow.show()
             pointerOverlayWindow.webContents.send('agent-msg', payload)
             setTimeout(() => {

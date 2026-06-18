@@ -47,6 +47,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
   calendarConnector: true,
   clipboardEnabled: true,
   controlCenterEnabled: true,
+  betaModeEnabled: false,
+  soundEnabled: false,
+  docked: false,
+
+  // ── Beta / Agent settings ──────────────────────────────────────────────────
+  showInDock: false,
+  showInScreenRecordings: true,
+  agentFolder: 'Default',
+  agentPermissionsEnabled: true,
+  agentIntegrationsEnabled: true,
+  voiceProfile: 'Default',
+  microphoneSource: 'System Default',
 
   gpuAcceleration: true,
   transparencyEffects: true,

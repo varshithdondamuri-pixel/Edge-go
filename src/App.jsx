@@ -357,20 +357,26 @@ export default function App() {
 
   // ── Control Center / Clipboard window resize ──────────────────────────────
   useEffect(() => {
-    if (!isSettingsRoute && isElectron && window.electronAPI.setControlCenter) {
-      window.electronAPI.setControlCenter(controlCenterOpen || clipboardOpen)
+    if (!isSettingsRoute && isElectron) {
+      if (window.electronAPI.setControlCenter) {
+        window.electronAPI.setControlCenter(controlCenterOpen || clipboardOpen)
+      }
+      if (window.electronAPI.setControlCenterDocked) {
+        window.electronAPI.setControlCenterDocked(!!(settings.docked && controlCenterOpen))
+      }
     }
-  }, [controlCenterOpen, clipboardOpen, isSettingsRoute])
+  }, [controlCenterOpen, clipboardOpen, settings.docked, isSettingsRoute])
 
   // ── Close overlays on focus loss (window blur) ──────────────────────────
   useEffect(() => {
     const handleBlur = () => {
+      if (settings.docked) return
       setControlCenterOpen(false)
       setClipboardOpen(false)
     }
     window.addEventListener('blur', handleBlur)
     return () => window.removeEventListener('blur', handleBlur)
-  }, [])
+  }, [settings.docked])
 
   useEffect(() => {
     if (!isElectron) return undefined
@@ -445,6 +451,12 @@ export default function App() {
           if (isElectron && window.electronAPI.mediaCommand)
             window.electronAPI.mediaCommand(command, value, source)
         }}
+        settings={settings}
+        onSettingsChange={setSettings}
+        media={media}
+        onPlayPause={handlePlayPause}
+        onNext={handleNext}
+        onPrev={handlePrev}
       />
     </>
   )

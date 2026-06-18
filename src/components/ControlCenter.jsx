@@ -6,16 +6,11 @@ function throttleDebounce(func, delay) {
   let timeoutId = null
   let lastArgs = null
   let lastCalled = 0
-
   return function(...args) {
     const now = Date.now()
     lastArgs = args
-
     if (now - lastCalled >= delay) {
-      if (timeoutId) {
-        clearTimeout(timeoutId)
-        timeoutId = null
-      }
+      if (timeoutId) { clearTimeout(timeoutId); timeoutId = null }
       func.apply(this, args)
       lastCalled = now
     } else {
@@ -29,24 +24,28 @@ function throttleDebounce(func, delay) {
   }
 }
 
-// ─── Control tiles config ────────────────────────────────────────────────────
-
 const FALLBACK_WIFI_NETWORKS = [
   { id: 'n1', name: 'HomeNetwork_5G', strength: 4, secured: true, connected: true, saved: true },
   { id: 'n2', name: 'CoffeeShop_Free', strength: 2, secured: false, connected: false, saved: false },
   { id: 'n3', name: 'Office_WiFi', strength: 3, secured: true, connected: false, saved: true },
 ]
 
-export default function ControlCenter({ 
-  open, 
-  onClose, 
-  onOpenSettings, 
-  battery, 
-  mediaVolume = 50, 
+export default function ControlCenter({
+  open,
+  onClose,
+  onOpenSettings,
+  battery,
+  mediaVolume = 50,
   onVolumeChange,
   allSessions = [],
   onMediaCommand,
   onOpenClipboard,
+  settings = {},
+  onSettingsChange,
+  media,
+  onPlayPause,
+  onNext,
+  onPrev,
 }) {
   const { level = 100, charging = false, available = false } = battery || {}
   const [wifi, setWifi] = useState(true)
@@ -59,44 +58,56 @@ export default function ControlCenter({
   const [wifiNetworks, setWifiNetworks] = useState(FALLBACK_WIFI_NETWORKS)
   const [connectedNetwork, setConnectedNetwork] = useState(FALLBACK_WIFI_NETWORKS[0])
   const [wifiError, setWifiError] = useState(null)
-  const [focusMode, setFocusMode] = useState('off') // off | work | personal | sleep
+  const [focusMode, setFocusMode] = useState('off')
   const [pendingControls, setPendingControls] = useState({})
   const [connectingNetworkId, setConnectingNetworkId] = useState(null)
   const [screenshotActive, setScreenshotActive] = useState(false)
   const screenshotTimerRef = useRef(null)
 
-  // AI Agent & Instagram Tab states
-  const [activeTab, setActiveTab] = useState('controls')
-  const [instagramPosts, setInstagramPosts] = useState([
-    { id: 1, user: 'edgego_beta', caption: 'Running Clicky Windows Beta! 🚀', likes: 45, date: 'Just now' },
-    { id: 2, user: 'ai_enthusiast', caption: 'Notch-based assistants are the future! 🔥', likes: 128, date: '2h ago' },
-    { id: 3, user: 'designer_daily', caption: 'Stunning glassmorphic UI layout concept.', likes: 95, date: '5h ago' }
-  ])
+  // ─── Sound helpers ────────────────────────────────────────────────────────
+  const playWakeChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = new AudioCtx()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      const now = ctx.currentTime
+      osc.frequency.setValueAtTime(523.25, now)
+      osc.frequency.setValueAtTime(659.25, now + 0.08)
+      osc.frequency.setValueAtTime(783.99, now + 0.16)
+      osc.frequency.setValueAtTime(1046.50, now + 0.24)
+      gain.gain.setValueAtTime(0.12, now)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(now + 0.65)
+    } catch (e) { console.warn('Audio chime error:', e) }
+  }
 
-  useEffect(() => {
-    if (!window.electronAPI?.onAgentMsg) return
+  const playPopSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = new AudioCtx()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      const now = ctx.currentTime
+      osc.frequency.setValueAtTime(600, now)
+      osc.frequency.exponentialRampToValueAtTime(150, now + 0.1)
+      gain.gain.setValueAtTime(0.08, now)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(now + 0.12)
+    } catch {}
+  }
 
-    const unsubscribe = window.electronAPI.onAgentMsg((data) => {
-      if (data.type === 'instagram_activity') {
-        const { action, content, username } = data
-        if (action === 'post' && content) {
-          setInstagramPosts(prev => [
-            {
-              id: prev.length + 1,
-              user: username || 'edgego_beta',
-              caption: content,
-              likes: Math.floor(Math.random() * 15) + 5,
-              date: 'Just now'
-            },
-            ...prev
-          ])
-        }
-      }
-    })
-
-    return () => unsubscribe()
-  }, [])
-
+  // ─── Pending helpers ──────────────────────────────────────────────────────
   const setControlPending = useCallback((control, pending) => {
     setPendingControls(prev => ({ ...prev, [control]: pending }))
   }, [])
@@ -110,17 +121,10 @@ export default function ControlCenter({
     }
     try {
       const result = await window.electronAPI.setSystemControl(control, value)
-      if (result?.ok === false) {
-        revert?.()
-        return false
-      }
+      if (result?.ok === false) { revert?.(); return false }
       return true
-    } catch {
-      revert?.()
-      return false
-    } finally {
-      if (track) setControlPending(control, false)
-    }
+    } catch { revert?.(); return false }
+    finally { if (track) setControlPending(control, false) }
   }, [setControlPending])
 
   const throttledBrightnessRef = useRef(null)
@@ -131,11 +135,10 @@ export default function ControlCenter({
   }
   const throttledBrightnessIPC = throttledBrightnessRef.current
 
-  // Sync with system state on open
+  // ─── Sync system state on open ────────────────────────────────────────────
   useEffect(() => {
     if (!open) return
     setWifiError(null)
-
     const syncSystemState = async () => {
       if (window.electronAPI?.getSystemState) {
         try {
@@ -148,11 +151,8 @@ export default function ControlCenter({
           setBrightness(Number.isFinite(state.brightness) ? state.brightness : 72)
           if (state.dnd) setFocusMode('work')
           else setFocusMode('off')
-        } catch (e) {
-          console.error('Failed to sync system state:', e)
-        }
+        } catch (e) { console.error('Failed to sync system state:', e) }
       }
-
       if (window.electronAPI?.getWifiNetworks) {
         try {
           const networks = await window.electronAPI.getWifiNetworks()
@@ -160,19 +160,14 @@ export default function ControlCenter({
             setWifiNetworks(networks)
             setConnectedNetwork(networks.find(net => net.connected) || networks[0])
           }
-        } catch (e) {
-          console.error('Failed to load Wi-Fi networks:', e)
-        }
+        } catch {}
       }
     }
-
     syncSystemState()
   }, [open])
 
   useEffect(() => {
-    return () => {
-      if (screenshotTimerRef.current) clearTimeout(screenshotTimerRef.current)
-    }
+    return () => { if (screenshotTimerRef.current) clearTimeout(screenshotTimerRef.current) }
   }, [])
 
   useEffect(() => {
@@ -186,6 +181,7 @@ export default function ControlCenter({
 
   const isPending = (control) => !!pendingControls[control]
 
+  // ─── Toggle handlers ──────────────────────────────────────────────────────
   const toggleWifi = () => {
     if (isPending('wifi') || isPending('airplaneMode')) return
     const next = !wifi
@@ -201,10 +197,7 @@ export default function ControlCenter({
     const next = !dnd
     setDnd(next)
     setFocusMode(next ? 'work' : 'off')
-    applySystemControl('dnd', next, () => {
-      setDnd(previous)
-      setFocusMode(previous ? 'work' : 'off')
-    })
+    applySystemControl('dnd', next, () => { setDnd(previous); setFocusMode(previous ? 'work' : 'off') })
   }
 
   const toggleNightLight = () => {
@@ -227,18 +220,10 @@ export default function ControlCenter({
     const prevWifi = wifi
     const prevBluetooth = bluetooth
     setAirplaneMode(next)
-    if (next) {
-      setWifi(false)
-      setBluetooth(false)
-      setShowNetworks(false)
-    } else {
-      setWifi(true)
-      setBluetooth(true)
-    }
+    if (next) { setWifi(false); setBluetooth(false); setShowNetworks(false) }
+    else { setWifi(true); setBluetooth(true) }
     applySystemControl('airplaneMode', next, () => {
-      setAirplaneMode(!next)
-      setWifi(prevWifi)
-      setBluetooth(prevBluetooth)
+      setAirplaneMode(!next); setWifi(prevWifi); setBluetooth(prevBluetooth)
     })
   }
 
@@ -249,10 +234,7 @@ export default function ControlCenter({
     const isDnd = modeId !== 'off'
     setFocusMode(modeId)
     setDnd(isDnd)
-    applySystemControl('dnd', isDnd, () => {
-      setDnd(previousDnd)
-      setFocusMode(previousMode)
-    })
+    applySystemControl('dnd', isDnd, () => { setDnd(previousDnd); setFocusMode(previousMode) })
   }
 
   const selectNetwork = async (network) => {
@@ -260,28 +242,19 @@ export default function ControlCenter({
     const previous = connectedNetwork
     setConnectingNetworkId(network.id)
     setWifiError(null)
-
     if (!window.electronAPI?.connectWifiNetwork) {
-      // Simulation or no API (e.g. running on macOS development environment)
       await new Promise(resolve => setTimeout(resolve, 800))
       setConnectedNetwork(network)
-      setWifiNetworks(networks => networks.map(net => ({
-        ...net,
-        connected: net.id === network.id,
-      })))
+      setWifiNetworks(networks => networks.map(net => ({ ...net, connected: net.id === network.id })))
       setConnectingNetworkId(null)
       setShowNetworks(false)
       return
     }
-
     try {
       const result = await window.electronAPI.connectWifiNetwork(network.name)
       if (result?.ok !== false) {
         setConnectedNetwork(network)
-        setWifiNetworks(networks => networks.map(net => ({
-          ...net,
-          connected: net.id === network.id,
-        })))
+        setWifiNetworks(networks => networks.map(net => ({ ...net, connected: net.id === network.id })))
         setShowNetworks(false)
       } else {
         setWifiError(result.error || 'Failed to connect')
@@ -310,389 +283,476 @@ export default function ControlCenter({
     onVolumeChange?.(Number(event.target.value))
   }
 
+  // ─── Settings helper ──────────────────────────────────────────────────────
+  const setSetting = (key, value) => {
+    onSettingsChange?.(prev => ({ ...prev, [key]: value }))
+  }
+
   return (
     <>
-      <div className="cc-backdrop" onClick={onClose} />
+      {!settings.docked && <div className="cc-backdrop" onClick={onClose} />}
       <div
-        className="cc-panel"
-        role="dialog"
-        aria-label="Control Center"
+        className={`cc-layout-container ${settings.docked ? 'docked' : ''}`}
         onClick={(e) => e.stopPropagation()}
+        style={{
+          position: 'fixed',
+          top: window.electronAPI ? '8px' : '38px',
+          right: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          zIndex: 8100,
+          alignItems: 'flex-end',
+        }}
       >
+        {/* ── Main Control Center Panel ── */}
+        <div className="cc-panel" role="dialog" aria-label="Control Center">
 
-        {/* ── Header ── */}
-        <div className="cc-header">
-          <span className="cc-title">Control Center</span>
-          <div className="cc-header-actions">
-            <button type="button" className="cc-settings-btn" onClick={() => onOpenSettings?.('general')} aria-label="Settings" title="Open Settings">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-              </svg>
-            </button>
-            <button type="button" className="cc-close" onClick={onClose} aria-label="Close">✕</button>
+          {/* Header */}
+          <div className="cc-header">
+            <span className="cc-title">Control Center</span>
+            <div className="cc-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+              {/* Dock button */}
+              <button
+                type="button"
+                className={`cc-dock-btn ${settings.docked ? 'active' : ''}`}
+                onClick={() => {
+                  const nextDock = !settings.docked
+                  setSetting('docked', nextDock)
+                  if (window.electronAPI?.setPanelLocked) window.electronAPI.setPanelLocked(nextDock)
+                }}
+                title={settings.docked ? 'Unlock Panel' : 'Dock & Lock'}
+              >📌</button>
+
+              {/* Settings button */}
+              <button type="button" className="cc-settings-btn" onClick={() => onOpenSettings?.('general')} aria-label="Settings" title="Open Settings">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+              </button>
+
+              {!settings.docked && (
+                <button type="button" className="cc-close" onClick={onClose} aria-label="Close">✕</button>
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* ── Tabs Navigation ── */}
-        <div className="cc-tabs" style={{ display: 'flex', gap: '8px', padding: '0 16px 10px', borderBottom: '1px solid var(--color-border)' }}>
-          {[
-            { id: 'controls', label: 'Controls', icon: '🎛️' },
-            { id: 'agent', label: 'AI Agent', icon: '🤖' },
-            { id: 'instagram', label: 'Instagram', icon: '📸' }
-          ].map(tab => (
-            <button
-              type="button"
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                flex: 1,
-                padding: '8px 4px',
-                borderRadius: '12px',
-                border: 'none',
-                background: activeTab === tab.id ? 'var(--color-border)' : 'transparent',
-                color: activeTab === tab.id ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
-                fontWeight: activeTab === tab.id ? '600' : '500',
-                fontSize: '11px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '4px',
-                transition: 'all 0.2s'
-              }}
-            >
-              <span>{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="cc-body" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-          {activeTab === 'controls' && (
-            <>
-              {/* ── Media Sessions ── */}
-              {allSessions.length > 0 && (
-                <div className="cc-media-section">
-                  <div className="cc-media-header">
-                    <span>🎵 Background Media</span>
-                    <span style={{ fontSize: '9px', opacity: 0.6 }}>({allSessions.length})</span>
-                  </div>
-                  <div className="cc-media-list">
-                    {allSessions.map((session, idx) => (
-                      <div key={idx} className="cc-media-item">
-                        <div className="cc-media-art">
-                          {session.source === 'Spotify' ? '🎧' : '🎶'}
-                        </div>
-                        <div className="cc-media-info">
-                          <div className="cc-media-title">{session.title}</div>
-                          <div className="cc-media-artist">{session.artist} • {session.source}</div>
-                        </div>
-                        <div className="cc-media-controls">
-                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('prev', null, session.sourceAppId || session.source)} aria-label={`Previous in ${session.source}`}>
-                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
-                          </button>
-                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('playpause', null, session.sourceAppId || session.source)} aria-label={`${session.isPlaying ? 'Pause' : 'Play'} ${session.source}`}>
-                            {session.isPlaying ? (
-                              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                            ) : (
-                              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                            )}
-                          </button>
-                          <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('next', null, session.sourceAppId || session.source)} aria-label={`Next in ${session.source}`}>
-                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                          </button>
-                        </div>
+          <div className="cc-body" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
+            {/* ── Media Sessions ── */}
+            {allSessions.length > 0 && (
+              <div className="cc-media-section">
+                <div className="cc-media-header">
+                  <span>🎵 Background Media</span>
+                  <span style={{ fontSize: '9px', opacity: 0.6 }}>({allSessions.length})</span>
+                </div>
+                <div className="cc-media-list">
+                  {allSessions.map((session, idx) => (
+                    <div key={idx} className="cc-media-item">
+                      <div className="cc-media-art">{session.source === 'Spotify' ? '🎧' : '🎶'}</div>
+                      <div className="cc-media-info">
+                        <div className="cc-media-title">{session.title}</div>
+                        <div className="cc-media-artist">{session.artist} • {session.source}</div>
                       </div>
-                    ))}
-                  </div>
+                      <div className="cc-media-controls">
+                        <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('prev', null, session.sourceAppId || session.source)}>
+                          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
+                        </button>
+                        <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('playpause', null, session.sourceAppId || session.source)}>
+                          {session.isPlaying
+                            ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                          }
+                        </button>
+                        <button type="button" className="cc-media-btn" onClick={() => onMediaCommand?.('next', null, session.sourceAppId || session.source)}>
+                          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* ── Row 1: Network tile group ── */}
-              <div className="cc-tile-group cc-network-group">
-                {/* Wi-Fi */}
-                <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''} ${isPending('wifi') ? 'pending' : ''}`}>
-                  <button
-                    type="button"
-                    id="cc-wifi-toggle"
-                    className="cc-tile-inner"
-                    onClick={toggleWifi}
-                    disabled={isPending('wifi') || isPending('airplaneMode')}
-                    aria-pressed={wifi}
-                  >
-                    <div className="cc-tile-icon">
-                      <WifiIcon2 active={wifi} />
-                    </div>
-                    <div className="cc-tile-info">
-                      <div className="cc-tile-name">Wi-Fi</div>
-                      <div className="cc-tile-sub">{wifi ? connectedNetwork?.name || 'On' : 'Off'}</div>
-                    </div>
+            {/* ── Network tiles ── */}
+            <div className="cc-tile-group cc-network-group">
+              <div className={`cc-tile cc-tile-wifi ${wifi ? 'active' : ''} ${isPending('wifi') ? 'pending' : ''}`}>
+                <button type="button" id="cc-wifi-toggle" className="cc-tile-inner" onClick={toggleWifi} disabled={isPending('wifi') || isPending('airplaneMode')} aria-pressed={wifi}>
+                  <div className="cc-tile-icon"><WifiIcon2 active={wifi} /></div>
+                  <div className="cc-tile-info">
+                    <div className="cc-tile-name">Wi-Fi</div>
+                    <div className="cc-tile-sub">{wifi ? connectedNetwork?.name || 'On' : 'Off'}</div>
+                  </div>
+                </button>
+                {wifi && (
+                  <button type="button" id="cc-network-expand" className="cc-tile-expand"
+                    onClick={(e) => { e.stopPropagation(); setShowNetworks(v => !v) }}
+                    disabled={isPending('wifi') || isPending('airplaneMode')} aria-label="Show networks">
+                    <ChevronIcon />
                   </button>
-                  {wifi && (
-                    <button
-                      type="button"
-                      id="cc-network-expand"
-                      className="cc-tile-expand"
-                      onClick={(e) => { e.stopPropagation(); setShowNetworks(v => !v) }}
-                      disabled={isPending('wifi') || isPending('airplaneMode')}
-                      aria-label="Show networks"
-                      title="Networks"
-                    >
-                      <ChevronIcon />
-                    </button>
-                  )}
-                </div>
-
-                {/* Bluetooth */}
-                <button
-                  type="button"
-                  id="cc-bluetooth"
-                  className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
-                  onClick={toggleBluetooth}
-                  disabled={isPending('bluetooth') || isPending('airplaneMode')}
-                  aria-pressed={bluetooth}
-                >
-                  <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
-                  <div className="cc-tile-info">
-                    <div className="cc-tile-name">Bluetooth</div>
-                    <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
-                  </div>
-                </button>
-
-                {/* Airplane */}
-                <button
-                  type="button"
-                  id="cc-airplane"
-                  className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
-                  onClick={toggleAirplaneMode}
-                  disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')}
-                  aria-pressed={airplaneMode}
-                >
-                  <div className="cc-tile-icon">✈️</div>
-                  <div className="cc-tile-info">
-                    <div className="cc-tile-name">Airplane</div>
-                    <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
-                  </div>
-                </button>
+                )}
               </div>
 
-              {/* ── Wi-Fi Networks dropdown ── */}
-              {wifi && showNetworks && (
-                <div className="cc-network-list" role="listbox" aria-label="Available networks">
-                  <div className="cc-network-list-title">Available Networks</div>
-                  {wifiError && (
-                    <div className="cc-network-error" role="alert">
-                      ⚠️ {wifiError}
-                    </div>
-                  )}
-                  {wifiNetworks.map(net => (
-                    <button
-                      type="button"
-                      key={net.id}
-                      className={`cc-network-item ${connectedNetwork?.id === net.id ? 'connected' : ''} ${connectingNetworkId === net.id ? 'pending' : ''}`}
-                      role="option"
-                      aria-selected={connectedNetwork?.id === net.id}
-                      disabled={!!connectingNetworkId}
-                      onClick={() => selectNetwork(net)}
-                    >
-                      <WifiSignal strength={net.strength} />
-                      <span className="cc-net-name">{net.name}</span>
-                      {net.secured && <span className="cc-net-lock" aria-label="Secured">🔒</span>}
-                      {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
-                      {connectingNetworkId === net.id ? (
-                        <span className="cc-net-spinner" aria-label="Connecting..." />
-                      ) : connectedNetwork?.id === net.id ? (
-                        <span className="cc-net-check">✓</span>
-                      ) : null}
-                    </button>
-                  ))}
+              <button type="button" id="cc-bluetooth" className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
+                onClick={toggleBluetooth} disabled={isPending('bluetooth') || isPending('airplaneMode')} aria-pressed={bluetooth}>
+                <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
+                <div className="cc-tile-info">
+                  <div className="cc-tile-name">Bluetooth</div>
+                  <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
                 </div>
-              )}
+              </button>
 
-              {/* ── Row 2: Focus / DND ── */}
-              <div className="cc-tile-group cc-focus-group">
-                <div className="cc-focus-label">Focus Mode</div>
-                <div className="cc-focus-pills">
-                  {[
-                    { id: 'off',      icon: '🔔', label: 'Off' },
-                    { id: 'work',     icon: '💼', label: 'Work' },
-                    { id: 'personal', icon: '🏠', label: 'Personal' },
-                    { id: 'sleep',    icon: '🌙', label: 'Sleep' },
-                  ].map(f => (
-                    <button
-                      type="button"
-                      key={f.id}
-                      className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
-                      onClick={() => selectFocusMode(f.id)}
-                      disabled={isPending('dnd')}
-                      aria-pressed={focusMode === f.id}
-                      id={`focus-${f.id}`}
-                    >
-                      <span className="cc-focus-pill-icon">{f.icon}</span>
-                      <span>{f.label}</span>
-                    </button>
-                  ))}
+              <button type="button" id="cc-airplane" className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
+                onClick={toggleAirplaneMode} disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')} aria-pressed={airplaneMode}>
+                <div className="cc-tile-icon">✈️</div>
+                <div className="cc-tile-info">
+                  <div className="cc-tile-name">Airplane</div>
+                  <div className="cc-tile-sub">{airplaneMode ? 'On' : 'Off'}</div>
                 </div>
-              </div>
+              </button>
+            </div>
 
-              {/* ── Row 3: Sliders ── */}
-              <div className="cc-sliders">
-                {/* Brightness */}
-                <div className="cc-slider-row">
-                  <span className="cc-slider-icon" title="Brightness">
-                    <BrightnessIcon level={brightness} />
-                  </span>
-                  <div className="cc-slider-wrap">
-                    <input
-                      id="cc-brightness"
-                      type="range" min={0} max={100}
-                      value={brightness}
-                      onInput={handleBrightnessChange}
-                      onChange={handleBrightnessChange}
-                      className="cc-slider"
-                      aria-label="Brightness"
-                      aria-valuetext={`${brightness}%`}
-                    />
-                  </div>
-                  <span className="cc-slider-val">{brightness}%</span>
-                </div>
-
-                {/* Volume */}
-                <div className="cc-slider-row">
-                  <span className="cc-slider-icon" title="Volume">
-                    {mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}
-                  </span>
-                  <div className="cc-slider-wrap">
-                    <input
-                      id="cc-volume"
-                      type="range" min={0} max={100}
-                      value={mediaVolume}
-                      onInput={handleVolumeInput}
-                      onChange={handleVolumeInput}
-                      className="cc-slider"
-                      aria-label="Volume"
-                      aria-valuetext={`${mediaVolume}%`}
-                    />
-                  </div>
-                  <span className="cc-slider-val">{mediaVolume}%</span>
-                </div>
+            {/* Wi-Fi network list */}
+            {wifi && showNetworks && (
+              <div className="cc-network-list" role="listbox">
+                <div className="cc-network-list-title">Available Networks</div>
+                {wifiError && <div className="cc-network-error" role="alert">⚠️ {wifiError}</div>}
+                {wifiNetworks.map(net => (
+                  <button key={net.id} type="button"
+                    className={`cc-network-item ${connectedNetwork?.id === net.id ? 'connected' : ''} ${connectingNetworkId === net.id ? 'pending' : ''}`}
+                    role="option" aria-selected={connectedNetwork?.id === net.id}
+                    disabled={!!connectingNetworkId} onClick={() => selectNetwork(net)}>
+                    <WifiSignal strength={net.strength} />
+                    <span className="cc-net-name">{net.name}</span>
+                    {net.secured && <span className="cc-net-lock">🔒</span>}
+                    {net.saved && !net.connected && <span className="cc-net-saved">Saved</span>}
+                    {connectingNetworkId === net.id
+                      ? <span className="cc-net-spinner" />
+                      : connectedNetwork?.id === net.id ? <span className="cc-net-check">✓</span> : null
+                    }
+                  </button>
+                ))}
               </div>
+            )}
 
-              {/* ── Row 4: Quick toggles ── */}
-              <div className="cc-quick-grid">
-                <QuickTile
-                  id="qt-dnd"
-                  icon={dnd ? '🔕' : '🔔'}
-                  label="DND"
-                  active={dnd}
-                  disabled={isPending('dnd')}
-                  onClick={toggleDnd}
-                />
-                <QuickTile
-                  id="qt-nightlight"
-                  icon="🌙"
-                  label="Night Light"
-                  active={nightLight}
-                  disabled={isPending('nightLight')}
-                  onClick={toggleNightLight}
-                />
-                <QuickTile
-                  id="qt-screenshot"
-                  icon="📸"
-                  label="Screenshot"
-                  active={screenshotActive}
-                  onClick={takeScreenshot}
-                />
-                <QuickTile
-                  id="qt-clipboard"
-                  icon="📋"
-                  label="Clipboard"
-                  active={false}
-                  onClick={() => onOpenClipboard?.()}
-                />
-              </div>
-
-              {/* ── Row 5: Battery status ── */}
-              <div className="cc-battery-status">
-                <div className="cc-batt-left">
-                  <div className="cc-batt-icon-wrap">
-                    <div 
-                      className="cc-batt-bar" 
-                      style={{ 
-                        width: `${level}%`, 
-                        background: level > 20 ? '#4ade80' : '#f87171' 
-                      }} 
-                    />
-                  </div>
-                  <div className="cc-batt-meta">
-                    <span className="cc-batt-pct">{level}%</span>
-                    <span className="cc-batt-state">
-                      {charging ? 'Charging' : 'Discharging'}
-                    </span>
-                  </div>
-                </div>
-                <div className="cc-batt-history">
-                  {[65,70,74,73,level].map((v,i) => (
-                    <div key={i} className="cc-batt-bar-mini" style={{ height: `${v * 0.28}px` }} />
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          {activeTab === 'agent' && (
-            <AgentPanel />
-          )}
-
-          {activeTab === 'instagram' && (
-            <div className="cc-instagram-widget">
-              <div className="cc-instagram-header">
-                <span className="cc-instagram-brand">Instagram Portal</span>
-                <span className="cc-agent-status" style={{ fontSize: '9px' }}>
-                  <span className="cc-agent-dot online" /> Simulated API Active
-                </span>
-              </div>
-              <div className="cc-instagram-stats">
-                <div className="cc-instagram-stat"><span>{instagramPosts.length}</span> posts</div>
-                <div className="cc-instagram-stat"><span>12.4K</span> followers</div>
-                <div className="cc-instagram-stat"><span>342</span> following</div>
-              </div>
-              <div className="cc-instagram-feed">
-                {instagramPosts.map(post => (
-                  <div key={post.id} className="cc-instagram-post">
-                    <div className="cc-instagram-user">@{post.user}</div>
-                    <div className="cc-instagram-caption">{post.caption}</div>
-                    <div className="cc-instagram-post-footer">
-                      ❤️ {post.likes} likes • {post.date}
-                    </div>
-                  </div>
+            {/* ── Focus Mode ── */}
+            <div className="cc-tile-group cc-focus-group">
+              <div className="cc-focus-label">Focus Mode</div>
+              <div className="cc-focus-pills">
+                {[
+                  { id: 'off', icon: '🔔', label: 'Off' },
+                  { id: 'work', icon: '💼', label: 'Work' },
+                  { id: 'personal', icon: '🏠', label: 'Personal' },
+                  { id: 'sleep', icon: '🌙', label: 'Sleep' },
+                ].map(f => (
+                  <button key={f.id} type="button"
+                    className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
+                    onClick={() => selectFocusMode(f.id)} disabled={isPending('dnd')}
+                    aria-pressed={focusMode === f.id} id={`focus-${f.id}`}>
+                    <span className="cc-focus-pill-icon">{f.icon}</span>
+                    <span>{f.label}</span>
+                  </button>
                 ))}
               </div>
             </div>
-          )}
+
+            {/* ── Sliders ── */}
+            <div className="cc-sliders">
+              <div className="cc-slider-row">
+                <span className="cc-slider-icon"><BrightnessIcon level={brightness} /></span>
+                <div className="cc-slider-wrap">
+                  <input id="cc-brightness" type="range" min={0} max={100} value={brightness}
+                    onInput={handleBrightnessChange} onChange={handleBrightnessChange}
+                    className="cc-slider" aria-label="Brightness" />
+                </div>
+                <span className="cc-slider-val">{brightness}%</span>
+              </div>
+              <div className="cc-slider-row">
+                <span className="cc-slider-icon">{mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}</span>
+                <div className="cc-slider-wrap">
+                  <input id="cc-volume" type="range" min={0} max={100} value={mediaVolume}
+                    onInput={handleVolumeInput} onChange={handleVolumeInput}
+                    className="cc-slider" aria-label="Volume" />
+                </div>
+                <span className="cc-slider-val">{mediaVolume}%</span>
+              </div>
+            </div>
+
+            {/* ── Quick toggles ── */}
+            <div className="cc-quick-grid">
+              <QuickTile id="qt-dnd" icon={dnd ? '🔕' : '🔔'} label="DND" active={dnd} disabled={isPending('dnd')} onClick={toggleDnd} />
+              <QuickTile id="qt-nightlight" icon="🌙" label="Night Light" active={nightLight} disabled={isPending('nightLight')} onClick={toggleNightLight} />
+              <QuickTile id="qt-screenshot" icon="📸" label="Screenshot" active={screenshotActive} onClick={takeScreenshot} />
+              <QuickTile id="qt-clipboard" icon="📋" label="Clipboard" active={false} onClick={() => onOpenClipboard?.()} />
+            </div>
+
+            {/* ── Battery ── */}
+            <div className="cc-battery-status">
+              <div className="cc-batt-left">
+                <div className="cc-batt-icon-wrap">
+                  <div className="cc-batt-bar" style={{ width: `${level}%`, background: level > 20 ? '#4ade80' : '#f87171' }} />
+                </div>
+                <div className="cc-batt-meta">
+                  <span className="cc-batt-pct">{level}%</span>
+                  <span className="cc-batt-state">{charging ? 'Charging' : 'Discharging'}</span>
+                </div>
+              </div>
+              <div className="cc-batt-history">
+                {[65,70,74,73,level].map((v,i) => (
+                  <div key={i} className="cc-batt-bar-mini" style={{ height: `${v * 0.28}px` }} />
+                ))}
+              </div>
+            </div>
+
+            <div className="cc-handle" />
+          </div>
         </div>
 
-        {/* Dock handle */}
-        <div className="cc-handle" />
+        {/* ── Beta Agent Panel (shows when betaModeEnabled) ── */}
+        {settings.betaModeEnabled && (
+          <BetaAgentPanel
+            settings={settings}
+            setSetting={setSetting}
+            onOpenSettings={onOpenSettings}
+            media={media}
+            mediaVolume={mediaVolume}
+            onVolumeChange={onVolumeChange}
+            onPlayPause={onPlayPause}
+            onNext={onNext}
+            onPrev={onPrev}
+          />
+        )}
       </div>
     </>
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ─── Beta Agent Panel ─────────────────────────────────────────────────────────
+
+function BetaAgentPanel({ settings, setSetting, onOpenSettings, media, mediaVolume, onVolumeChange, onPlayPause, onNext, onPrev }) {
+  const handleVolumeInput = (e) => onVolumeChange?.(Number(e.target.value))
+
+  return (
+    <div className="beta-panel" role="region" aria-label="Beta Agent Settings">
+      {/* Header */}
+      <div className="beta-panel-header">
+        <div className="beta-panel-header-left">
+          <span className="beta-panel-icon">⚡</span>
+          <span className="beta-panel-title">Beta Agent</span>
+        </div>
+        <div className="beta-panel-header-right">
+          <span className="beta-status-dot" />
+          <span className="beta-status-text">Active</span>
+        </div>
+      </div>
+
+      {/* ── Music quick-controls ── */}
+      {media && (
+        <div className="beta-music-card">
+          <div className="beta-music-info">
+            <span className="beta-music-title">{media.title || 'No track playing'}</span>
+            <span className="beta-music-artist">{media.artist || 'Media Idle'}</span>
+          </div>
+          <div className="beta-music-controls">
+            <button type="button" className="beta-music-btn" onClick={onPrev} aria-label="Previous">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
+            </button>
+            <button type="button" className="beta-music-btn play" onClick={onPlayPause} aria-label="Play/Pause">
+              {media.isPlaying
+                ? <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                : <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>
+              }
+            </button>
+            <button type="button" className="beta-music-btn" onClick={onNext} aria-label="Next">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+            </button>
+          </div>
+          <div className="beta-vol-row">
+            <span className="beta-vol-icon">{mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}</span>
+            <input type="range" min={0} max={100} value={mediaVolume}
+              onChange={handleVolumeInput} className="beta-vol-slider" aria-label="Volume" />
+            <span className="beta-vol-val">{mediaVolume}%</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── AI Agent Panel ── */}
+      <div className="beta-agent-wrapper" style={{ padding: '0 18px 12px', borderBottom: '1px solid rgba(124, 106, 247, 0.15)' }}>
+        <AgentPanel />
+      </div>
+
+      {/* ── CONNECTIONS ── */}
+      <div className="beta-section-title">CONNECTIONS</div>
+
+      <BetaRow
+        icon="🔗"
+        label="Integrations"
+        value={settings.agentIntegrationsEnabled ? 'Active' : 'Disabled'}
+        valueColor={settings.agentIntegrationsEnabled ? '#4ade80' : undefined}
+        hasArrow
+        onClick={() => onOpenSettings?.('connectors')}
+      />
+
+      {/* ── CUSTOMIZATION ── */}
+      <div className="beta-section-title" style={{ marginTop: '10px' }}>CUSTOMIZATION</div>
+
+      <BetaRow
+        icon="⌨️"
+        label="Shortcuts"
+        hasArrow
+        onClick={() => onOpenSettings?.('shortcuts')}
+      />
+
+      <BetaRow
+        icon="🎤"
+        label="Voice"
+        value={settings.voiceProfile || 'Default'}
+        hasArrow
+        onClick={() => {/* voice config coming soon */}}
+      />
+
+      <BetaRow
+        icon="🎙️"
+        label="Microphone"
+        value={settings.microphoneSource || 'System Default'}
+        hasArrow
+        onClick={() => {/* microphone config coming soon */}}
+      />
+
+      <BetaRow
+        icon="📁"
+        label="Agent Folder"
+        value={settings.agentFolder || 'Default'}
+        hasArrow
+        onClick={() => {/* folder picker coming soon */}}
+      />
+
+      <BetaRow
+        icon="🔐"
+        label="Agent Permissions"
+        value={settings.agentPermissionsEnabled ? 'Allowed' : 'Restricted'}
+        valueColor={settings.agentPermissionsEnabled ? '#4ade80' : '#f87171'}
+        hasToggle
+        toggleValue={settings.agentPermissionsEnabled}
+        onToggle={(v) => setSetting('agentPermissionsEnabled', v)}
+      />
+
+      <BetaRow
+        icon="🔊"
+        label="Sound Effects"
+        hint="Play chimes and notifications"
+        hasToggle
+        toggleValue={settings.soundEnabled}
+        onToggle={(v) => setSetting('soundEnabled', v)}
+      />
+
+      <BetaRow
+        icon="📌"
+        label="Show in Dock"
+        hint="Keep notch visible in taskbar"
+        hasToggle
+        toggleValue={settings.showInDock}
+        onToggle={(v) => {
+          setSetting('showInDock', v)
+          window.electronAPI?.setShowInTaskbar?.(v)
+        }}
+      />
+
+      <BetaRow
+        icon="📹"
+        label="Show in Screen Recordings"
+        hint="Allow capture tools to see the notch"
+        hasToggle
+        toggleValue={settings.showInScreenRecordings}
+        onToggle={(v) => setSetting('showInScreenRecordings', v)}
+      />
+
+      {/* ── UPDATES & SUPPORT ── */}
+      <div className="beta-section-title" style={{ marginTop: '10px' }}>UPDATES & SUPPORT</div>
+
+      <BetaRow
+        icon="🔄"
+        label="Auto Check Updates"
+        hasToggle
+        toggleValue={settings.autoCheckUpdates !== false}
+        onToggle={(v) => setSetting('autoCheckUpdates', v)}
+      />
+
+      <BetaRow
+        icon="ℹ️"
+        label="About Edge Go"
+        hasArrow
+        onClick={() => onOpenSettings?.('about')}
+      />
+
+      <div className="beta-panel-footer">
+        <span>Edge Go Beta</span>
+        <span style={{ opacity: 0.4 }}>•</span>
+        <span style={{ color: 'var(--color-accent)' }}>v1.7.0</span>
+      </div>
+    </div>
+  )
+}
+
+// ─── Beta Row Item ─────────────────────────────────────────────────────────────
+
+function BetaRow({ icon, label, hint, value, valueColor, hasArrow, hasToggle, toggleValue, onToggle, onClick }) {
+  return (
+    <div
+      className={`beta-row ${onClick || hasArrow ? 'clickable' : ''}`}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+    >
+      <div className="beta-row-left">
+        <span className="beta-row-icon">{icon}</span>
+        <div className="beta-row-text">
+          <span className="beta-row-label">{label}</span>
+          {hint && <span className="beta-row-hint">{hint}</span>}
+        </div>
+      </div>
+      <div className="beta-row-right">
+        {value && (
+          <span className="beta-row-value" style={valueColor ? { color: valueColor } : undefined}>
+            {value}
+          </span>
+        )}
+        {hasToggle && (
+          <BetaToggle value={toggleValue} onChange={onToggle} />
+        )}
+        {hasArrow && !hasToggle && (
+          <span className="beta-row-chevron">›</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Beta Toggle ──────────────────────────────────────────────────────────────
+
+function BetaToggle({ value, onChange }) {
+  return (
+    <div
+      className={`beta-toggle ${value ? 'on' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onChange?.(!value) }}
+      role="switch"
+      aria-checked={value}
+      tabIndex={0}
+      onKeyDown={(e) => e.key === ' ' && (e.stopPropagation(), onChange?.(!value))}
+    >
+      <div className="beta-toggle-thumb" />
+    </div>
+  )
+}
+
+// ─── Sub-components ────────────────────────────────────────────────────────────
 
 function QuickTile({ id, icon, label, active, disabled = false, onClick }) {
   return (
-    <button
-      type="button"
-      id={id}
-      className={`qt-tile ${active ? 'active' : ''}`}
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      title={label}
-    >
+    <button type="button" id={id} className={`qt-tile ${active ? 'active' : ''}`}
+      onClick={onClick} disabled={disabled} aria-pressed={active} title={label}>
       <span className="qt-icon">{icon}</span>
       <span className="qt-label">{label}</span>
     </button>
@@ -715,7 +775,7 @@ function BluetoothIcon({ active }) {
   )
 }
 
-function BrightnessIcon({ level }) {
+function BrightnessIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z"/>

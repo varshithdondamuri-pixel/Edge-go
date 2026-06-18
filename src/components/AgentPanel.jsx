@@ -1,166 +1,308 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 
+/* ── Intent → visual meta ──────────────────────────────────── */
+const INTENT_META = {
+  git:             { icon: '📁', color: '#22c55e', label: 'Git' },
+  click:           { icon: '🎯', color: '#3b82f6', label: 'Click' },
+  web_search:      { icon: '🌐', color: '#f59e0b', label: 'Web Search' },
+  create_html:     { icon: '🎨', color: '#a855f7', label: 'HTML Creator' },
+  create_document: { icon: '📄', color: '#06b6d4', label: 'Document' },
+  play_video:      { icon: '▶️', color: '#ec4899', label: 'Video' },
+  microsoft_app:   { icon: '🖥️', color: '#0078d4', label: 'Microsoft' },
+  multi_agent:     { icon: '🤖', color: '#7c6af7', label: 'Multi-Agent' },
+  screenshot:      { icon: '📸', color: '#84cc16', label: 'Screen' },
+  instagram:       { icon: '📸', color: '#e1306c', label: 'Instagram' },
+  whatsapp:        { icon: '💬', color: '#25d366', label: 'WhatsApp' },
+  browser:         { icon: '🌍', color: '#f97316', label: 'Browser' },
+  notion:          { icon: '📝', color: '#ffffff', label: 'Notion' },
+  help:            { icon: '👋', color: '#7c6af7', label: 'Help' },
+  qa_search:       { icon: '🔍', color: '#94a3b8', label: 'Knowledge' },
+}
+
+const AGENT_TYPE_META = {
+  researcher: { icon: '🔬', color: '#f59e0b' },
+  creator:    { icon: '🎨', color: '#a855f7' },
+  executor:   { icon: '⚡', color: '#3b82f6' },
+  reviewer:   { icon: '🔍', color: '#22c55e' },
+  writer:     { icon: '✍️', color: '#06b6d4' },
+  analyst:    { icon: '📊', color: '#ec4899' },
+}
+
+function playWakeSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    const now = ctx.currentTime
+    osc.frequency.setValueAtTime(523.25, now)
+    osc.frequency.setValueAtTime(659.25, now + 0.08)
+    osc.frequency.setValueAtTime(783.99, now + 0.16)
+    osc.frequency.setValueAtTime(1046.50, now + 0.24)
+    gain.gain.setValueAtTime(0.1, now)
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start()
+    osc.stop(now + 0.6)
+  } catch (e) {}
+}
+
+/* ── Sub-components ────────────────────────────────────────── */
+
+function SearchResultCard({ results, query }) {
+  if (!results?.length) return null
+  return (
+    <div className="ap-result-card search-card">
+      <div className="ap-card-header">
+        <span className="ap-card-icon">🌐</span>
+        <span className="ap-card-title">Web Search: <em>{query}</em></span>
+        <span className="ap-card-badge">{results.length} results</span>
+      </div>
+      <div className="ap-search-results">
+        {results.map((r) => (
+          <a
+            key={r.rank}
+            href={r.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ap-search-result-row"
+          >
+            <span className="ap-search-result-rank">{r.rank}</span>
+            <span className="ap-search-result-body">
+              <span className="ap-search-result-title">{r.title}</span>
+              {r.snippet && <span className="ap-search-result-snippet">{r.snippet}</span>}
+              <span className="ap-search-result-url">{r.url}</span>
+            </span>
+            <span className="ap-search-result-arrow">↗</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FileCreatedCard({ file, fileType, title }) {
+  const extIcons = { html: '🎨', txt: '📃', md: '📝', docx: '📄', xlsx: '📊', csv: '📊', py: '🐍', js: '⚡' }
+  const icon = extIcons[fileType] || '📄'
+  const filename = file ? file.split(/[\\/]/).pop() : 'file'
+  return (
+    <div className="ap-result-card file-card">
+      <div className="ap-card-header">
+        <span className="ap-card-icon">{icon}</span>
+        <span className="ap-card-title">{title || filename}</span>
+        <span className="ap-card-badge" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>created ✓</span>
+      </div>
+      <div className="ap-file-info">
+        <div className="ap-file-type-pill">{fileType?.toUpperCase()}</div>
+        <div className="ap-file-path">{file || 'Documents'}</div>
+      </div>
+    </div>
+  )
+}
+
+function AgentPipeline({ agents }) {
+  if (!agents?.length) return null
+  return (
+    <div className="ap-pipeline">
+      <div className="ap-pipeline-label">AGENT PIPELINE</div>
+      <div className="ap-pipeline-track">
+        {agents.map((agent, i) => {
+          const meta = AGENT_TYPE_META[agent.agentType] || { icon: '🤖', color: '#7c6af7' }
+          return (
+            <React.Fragment key={agent.id}>
+              <div className={`ap-pipeline-node ${agent.status}`}>
+                <div className="ap-pipeline-node-icon" style={{ color: meta.color }}>{meta.icon}</div>
+                <div className="ap-pipeline-node-label">{agent.description}</div>
+                {agent.status === 'active' && <div className="ap-pipeline-pulse" style={{ background: meta.color }} />}
+                {agent.status === 'done' && <div className="ap-pipeline-check">✓</div>}
+              </div>
+              {i < agents.length - 1 && <div className="ap-pipeline-arrow">→</div>}
+            </React.Fragment>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/* ── Main Component ─────────────────────────────────────────── */
 export default function AgentPanel() {
-  const [prompt, setPrompt] = useState('')
-  const [status, setStatus] = useState('online') // online | thinking | running
-  const [thoughts, setThoughts] = useState('')
-  const [response, setResponse] = useState('')
-  const [subagents, setSubagents] = useState([])
-  const [logs, setLogs] = useState([])
-  const [wakeEnabled, setWakeEnabled] = useState(true)
-  const [isListening, setIsListening] = useState(false)
-  
-  const endThoughtsRef = useRef(null)
-  const endResponseRef = useRef(null)
+  const [prompt, setPrompt]             = useState('')
+  const [status, setStatus]             = useState('online')
+  const [thoughts, setThoughts]         = useState('')
+  const [response, setResponse]         = useState('')
+  const [subagents, setSubagents]       = useState([])
+  const [logs, setLogs]                 = useState([])
+  const [wakeEnabled, setWakeEnabled]   = useState(true)
+  const [isListening, setIsListening]   = useState(false)
+  const [searchResults, setSearchResults] = useState(null)
+  const [fileCreated, setFileCreated]   = useState(null)
+  const [currentIntent, setCurrentIntent] = useState(null)
+  const [showLogs, setShowLogs]         = useState(false)
 
-  // Web Audio API rising futuristic chime for wake word activation
-  const playWakeSound = () => {
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext
-      if (!AudioCtx) return
-      
-      const ctx = new AudioCtx()
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      
-      osc.type = 'sine'
-      // Futuristic ascending chime: C5 -> E5 -> G5 -> C6
-      const now = ctx.currentTime
-      osc.frequency.setValueAtTime(523.25, now)
-      osc.frequency.setValueAtTime(659.25, now + 0.08)
-      osc.frequency.setValueAtTime(783.99, now + 0.16)
-      osc.frequency.setValueAtTime(1046.50, now + 0.24)
-      
-      gain.gain.setValueAtTime(0.1, now)
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55)
-      
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      
-      osc.start()
-      osc.stop(now + 0.6)
-    } catch (e) {
-      console.warn('[AgentPanel] Audio chime error:', e)
-    }
-  }
+  const endThoughtsRef  = useRef(null)
+  const endResponseRef  = useRef(null)
+  const inputRef        = useRef(null)
 
+  /* IPC listener */
   useEffect(() => {
     if (!window.electronAPI?.onAgentMsg) return
-
-    const unsubscribe = window.electronAPI.onAgentMsg((data) => {
-      if (data.type === 'ready') {
-        setStatus('online')
-      } else if (data.type === 'status') {
-        if (data.state === 'thinking') {
-          setStatus('thinking')
-          setIsListening(false)
-        } else if (data.state === 'idle') {
+    const unsub = window.electronAPI.onAgentMsg((data) => {
+      switch (data.type) {
+        case 'ready':
           setStatus('online')
-        }
-      } else if (data.type === 'wake') {
-        // Wake word triggered!
-        playWakeSound()
-        setIsListening(true)
-        setLogs((prev) => [...prev, "🎙️ Wake Word 'Hey Clicky' triggered!"])
-        // Automatically close listening state if no speech recognized within 5s
-        setTimeout(() => {
-          setIsListening(false)
-        }, 5000)
-      } else if (data.type === 'thought') {
-        setStatus('thinking')
-        setThoughts((prev) => prev + data.text)
-      } else if (data.type === 'response_chunk') {
-        setStatus('thinking')
-        setResponse((prev) => prev + data.text)
-      } else if (data.type === 'done') {
-        setStatus('online')
-        setResponse(data.text)
-      } else if (data.type === 'subagent_start') {
-        setStatus('running')
-        setSubagents((prev) => {
-          if (prev.some((s) => s.id === data.id)) return prev
-          return [...prev, { id: data.id, description: data.description, status: 'active' }]
-        })
-        setLogs((prev) => [...prev, `Spawning subagent: "${data.description}"`])
-      } else if (data.type === 'tool_call') {
-        setLogs((prev) => [...prev, `Tool Call: ${data.name}(${JSON.stringify(data.args)})`])
-      } else if (data.type === 'tool_done') {
-        setSubagents((prev) =>
-          prev.map((s) => (s.status === 'active' ? { ...s, status: 'done' } : s))
-        )
-        setLogs((prev) => [...prev, `Tool executed: success`])
-      } else if (data.type === 'status_log') {
-        setLogs((prev) => [...prev, `System: ${data.message}`])
-      } else if (data.type === 'error') {
-        setStatus('online')
-        setLogs((prev) => [...prev, `⚠️ Error: ${data.message}`])
+          break
+        case 'status':
+          setStatus(data.state === 'thinking' ? 'thinking' : 'online')
+          if (data.state === 'idle') setIsListening(false)
+          break
+        case 'wake':
+          playWakeSound()
+          setIsListening(true)
+          setLogs(p => [...p, "🎙️ Wake Word 'Hey Clicky' triggered!"])
+          setTimeout(() => setIsListening(false), 5000)
+          break
+        case 'thought':
+          setStatus('thinking')
+          setThoughts(p => p + data.text)
+          break
+        case 'response_chunk':
+          setStatus('thinking')
+          setResponse(p => p + data.text)
+          break
+        case 'done':
+          setStatus('online')
+          setResponse(data.text)
+          break
+        case 'subagent_start':
+          setStatus('running')
+          setSubagents(p => {
+            if (p.some(s => s.id === data.id)) return p
+            return [...p, {
+              id: data.id,
+              description: data.description,
+              agentType: data.agent_type || '',
+              status: 'active',
+            }]
+          })
+          setLogs(p => [...p, `↳ Spawning: "${data.description}"`])
+          break
+        case 'tool_call':
+          setLogs(p => [...p, `⚙ ${data.name}(${JSON.stringify(data.args || {})})`])
+          break
+        case 'tool_done':
+          setSubagents(p => p.map(s => s.status === 'active' ? { ...s, status: 'done' } : s))
+          if (data.result) setLogs(p => [...p, `✓ ${String(data.result).slice(0, 120)}`])
+          break
+        case 'search_results':
+          setSearchResults({ query: data.query, results: data.results })
+          break
+        case 'file_created':
+          setFileCreated({ file: data.file, fileType: data.file_type, title: data.title })
+          break
+        case 'status_log':
+          setLogs(p => [...p, `ℹ ${data.message}`])
+          break
+        case 'error':
+          setStatus('online')
+          setLogs(p => [...p, `⚠ Error: ${data.message}`])
+          break
+        default:
+          break
       }
     })
-
-    return () => unsubscribe()
+    return () => unsub()
   }, [])
 
-  // Auto-scroll thoughts and responses
-  useEffect(() => {
-    endThoughtsRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [thoughts])
+  useEffect(() => { endThoughtsRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [thoughts])
+  useEffect(() => { endResponseRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [response])
 
-  useEffect(() => {
-    endResponseRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [response])
-
-  const handleSend = (e) => {
-    e.preventDefault()
+  const handleSend = useCallback((e) => {
+    e?.preventDefault()
     if (!prompt.trim() || status === 'thinking') return
+
+    // Detect current intent for visual feedback
+    const pl = prompt.toLowerCase()
+    let intent = null
+    if (pl.includes('search') || pl.includes('find online')) intent = 'web_search'
+    else if (pl.includes('html') || pl.includes('landing page') || pl.includes('webpage')) intent = 'create_html'
+    else if (pl.includes('document') || pl.includes('excel') || pl.includes('word doc')) intent = 'create_document'
+    else if (pl.includes('play video') || pl.includes('youtube') || pl.includes('brave')) intent = 'play_video'
+    else if (pl.includes('word') || pl.includes('onenote') || pl.includes('outlook') || pl.includes('teams')) intent = 'microsoft_app'
+    else if (pl.includes('orchestrate') || pl.includes('multi agent')) intent = 'multi_agent'
+    else if (pl.includes('git')) intent = 'git'
+    setCurrentIntent(intent)
 
     setThoughts('')
     setResponse('')
     setSubagents([])
-    setLogs([`Sending command: "${prompt}"`])
+    setLogs([`▶ "${prompt}"`])
+    setSearchResults(null)
+    setFileCreated(null)
     setStatus('thinking')
     setIsListening(false)
-
     window.electronAPI.sendAgentPrompt(prompt)
     setPrompt('')
-  }
+    inputRef.current?.focus()
+  }, [prompt, status])
 
   const handleToggleWake = () => {
-    const nextVal = !wakeEnabled
-    setWakeEnabled(nextVal)
-    if (window.electronAPI?.setWakeWord) {
-      window.electronAPI.setWakeWord(nextVal)
-    }
-    setLogs((prev) => [...prev, `Voice wake word: ${nextVal ? 'ON' : 'OFF'}`])
+    const next = !wakeEnabled
+    setWakeEnabled(next)
+    window.electronAPI?.setWakeWord?.(next)
+    setLogs(p => [...p, `Voice wake: ${next ? 'ON' : 'OFF'}`])
   }
+
+  const intentMeta = currentIntent ? INTENT_META[currentIntent] : null
+  const isThinking = status === 'thinking' || status === 'running'
+
+  /* Quick-action chips */
+  const quickActions = [
+    { label: '🌐 Search web', prompt: 'search the web for ' },
+    { label: '🎨 Create HTML', prompt: 'create a landing page for ' },
+    { label: '📄 Create doc', prompt: 'create a markdown document: ' },
+    { label: '▶️ Play video', prompt: 'play video on YouTube in Brave: ' },
+    { label: '🖥️ Open Word', prompt: 'open Microsoft Word' },
+    { label: '🤖 Run agents', prompt: 'orchestrate agents to research and create: ' },
+    { label: '📁 Git status', prompt: 'show git status' },
+    { label: '❓ Help', prompt: 'help' },
+  ]
 
   return (
     <div className="cc-agent-container">
-      {/* Header / Config Toggles */}
+      {/* ── Header ── */}
       <div className="cc-agent-header">
         <div className="cc-agent-status">
-          <span 
-            className={`cc-agent-dot ${isListening ? 'thinking' : status === 'thinking' ? 'thinking' : 'online'}`}
-            style={{ backgroundColor: isListening ? '#3b82f6' : undefined }}
+          <span
+            className={`cc-agent-dot ${isListening ? 'thinking' : isThinking ? 'thinking' : 'online'}`}
           />
-          {isListening ? '🎙️ Listening...' : status === 'thinking' ? 'Agent: Thinking...' : status === 'running' ? 'Agent: Orchestrating Subagents' : 'Agent: Ready'}
+          {isListening
+            ? '🎙️ Listening...'
+            : status === 'running'
+            ? `🤖 Orchestrating ${subagents.length} agents...`
+            : isThinking
+            ? '⚡ Executing...'
+            : intentMeta
+            ? `${intentMeta.icon} ${intentMeta.label} ready`
+            : '✓ Clicky Ready'}
         </div>
-        
-        {/* Toggle Switch */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
-          <input 
-            type="checkbox" 
-            checked={wakeEnabled}
-            onChange={handleToggleWake}
-            style={{ cursor: 'pointer' }}
-          />
-          Wake Word "Hey Clicky"
+        <label className="ap-wake-toggle" title="Toggle voice wake word">
+          <span className={`ap-wake-pill ${wakeEnabled ? 'on' : ''}`} onClick={handleToggleWake}>
+            <span className="ap-wake-thumb" />
+          </span>
+          <span style={{ fontSize: 9, color: 'var(--color-text-muted)' }}>Hey Clicky</span>
         </label>
       </div>
 
-      {/* Thought stream container */}
+      {/* ── Thought stream ── */}
       {thoughts && (
         <div className="agent-thought-container">
-          <div className="agent-thought-title">Agent Thought Process</div>
+          <div className="agent-thought-title">
+            <span className="ap-thinking-dot" /> Thinking
+          </div>
           <div className="agent-thought-text">
             {thoughts}
             <div ref={endThoughtsRef} />
@@ -168,75 +310,104 @@ export default function AgentPanel() {
         </div>
       )}
 
-      {/* Subagents spawned list */}
-      {subagents.length > 0 && (
-        <div className="agent-subagents-section">
-          <div className="agent-subagents-title">Active Subtasks / Agents</div>
-          <div className="agent-subagent-cards">
-            {subagents.map((sub) => (
-              <div 
-                key={sub.id} 
-                className={`agent-subagent-card ${sub.status === 'active' ? 'active' : ''}`}
-              >
-                <span className="agent-subagent-icon">⚙️</span>
-                <span className="agent-subagent-text">{sub.description}</span>
-                <span className="agent-subagent-status">{sub.status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* ── Agent pipeline timeline ── */}
+      {subagents.length > 0 && <AgentPipeline agents={subagents} />}
+
+      {/* ── Search result cards ── */}
+      {searchResults && (
+        <SearchResultCard results={searchResults.results} query={searchResults.query} />
       )}
 
-      {/* Final response box */}
+      {/* ── File created card ── */}
+      {fileCreated && (
+        <FileCreatedCard
+          file={fileCreated.file}
+          fileType={fileCreated.fileType}
+          title={fileCreated.title}
+        />
+      )}
+
+      {/* ── Response box ── */}
       {response && (
         <div className="agent-output-box">
-          <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Response:</div>
-          <div style={{ whiteSpace: 'pre-wrap' }}>
+          <div className="ap-response-label">
+            {intentMeta && <span>{intentMeta.icon}</span>} Response
+          </div>
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: 11, lineHeight: 1.55 }}>
             {response}
             <div ref={endResponseRef} />
           </div>
         </div>
       )}
 
-      {/* Logs and tool calls */}
+      {/* ── System log (collapsed) ── */}
       {logs.length > 0 && (
-        <div className="cc-media-section" style={{ padding: '8px 12px', borderStyle: 'dashed' }}>
-          <div className="cc-media-header" style={{ fontSize: '9px', marginBottom: '2px' }}>
-            System Log
-          </div>
-          <div style={{ fontSize: '10px', color: 'var(--color-text-secondary)', fontFamily: 'monospace', maxHeight: '60px', overflowY: 'auto' }}>
-            {logs.map((log, index) => (
-              <div key={index} style={{ marginBottom: '2px' }}>{log}</div>
-            ))}
-          </div>
+        <div className="ap-log-section">
+          <button
+            className="ap-log-toggle"
+            onClick={() => setShowLogs(v => !v)}
+          >
+            <span>System Log ({logs.length})</span>
+            <span style={{ fontSize: 10 }}>{showLogs ? '▲' : '▼'}</span>
+          </button>
+          {showLogs && (
+            <div className="ap-log-body">
+              {logs.map((log, i) => (
+                <div key={i} className="ap-log-line">{log}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Prompt input field - glows blue with breathing effect when Listening */}
-      <form 
-        onSubmit={handleSend} 
+      {/* ── Quick action chips ── */}
+      {!isThinking && !response && (
+        <div className="ap-quick-actions">
+          {quickActions.map((qa) => (
+            <button
+              key={qa.label}
+              className="ap-quick-chip"
+              onClick={() => {
+                setPrompt(qa.prompt)
+                inputRef.current?.focus()
+              }}
+            >
+              {qa.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Prompt input ── */}
+      <form
+        onSubmit={handleSend}
         className="cc-agent-prompt-box"
-        style={{ 
-          borderColor: isListening ? '#3b82f6' : undefined,
-          boxShadow: isListening ? '0 0 10px rgba(59, 130, 246, 0.4)' : undefined,
-          animation: isListening ? 'agentPulse 1s infinite alternate' : undefined
+        style={{
+          borderColor: isListening ? '#3b82f6' : intentMeta ? intentMeta.color + '55' : undefined,
+          boxShadow: isListening ? '0 0 10px rgba(59,130,246,0.4)' : undefined,
         }}
       >
-        <input 
+        <input
+          ref={inputRef}
           type="text"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder={isListening ? "Listening... Speak or type prompt" : "Ask Clicky (e.g. click at coordinates, show git status)..."}
+          placeholder={
+            isListening
+              ? 'Listening… speak or type'
+              : 'Ask Clicky — search web, create HTML, open Word, play video…'
+          }
           className="cc-agent-input"
-          disabled={status === 'thinking'}
+          disabled={isThinking}
+          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend(e)}
         />
-        <button 
-          type="submit" 
-          disabled={!prompt.trim() || status === 'thinking'}
+        <button
+          type="submit"
+          disabled={!prompt.trim() || isThinking}
           className="cc-agent-send-btn"
-          aria-label="Send prompt"
+          aria-label="Send"
         >
-          ➔
+          {isThinking ? '…' : '➔'}
         </button>
       </form>
     </div>

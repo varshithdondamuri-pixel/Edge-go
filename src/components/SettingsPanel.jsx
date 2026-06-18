@@ -144,6 +144,12 @@ function GeneralTab({ s, set }) {
             { value: 'right', label: 'Right' },
           ]} />
         </Row>
+        <Row label="Beta Agent Mode" hint="Enable offline AI Agent prompt, pipeline, and settings">
+          <Toggle id="tog-beta" value={s.betaModeEnabled} onChange={v => {
+            set('betaModeEnabled', v)
+            if (v) set('soundEnabled', true)
+          }} />
+        </Row>
       </Section>
       <Section title="Localization">
         <Row label="Clock Format">
