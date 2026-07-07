@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import AgentPanel from './AgentPanel'
+import MusicPlayer from './MusicPlayer.jsx'
 
 // Leading-and-trailing throttle-debounce helper
 function throttleDebounce(func, delay) {
@@ -46,8 +47,9 @@ export default function ControlCenter({
   onPlayPause,
   onNext,
   onPrev,
+  onSeek,
 }) {
-  const { level = 100, charging = false, available = false } = battery || {}
+  const { level = 100, charging = false, available = false, acConnected = false, timeRemaining = '' } = battery || {}
   const [wifi, setWifi] = useState(true)
   const [bluetooth, setBluetooth] = useState(true)
   const [dnd, setDnd] = useState(false)
@@ -457,6 +459,28 @@ export default function ControlCenter({
               </div>
             </div>
 
+            {/* ── Beta Agent Panel ── */}
+            {/* ── Music Player ── */}
+            {media && (media.title || media.isPlaying) && (
+              <div className="cc-music-player-wrap" style={{ margin: '4px 0 10px', width: '100%' }}>
+                <MusicPlayer
+                  media={media}
+                  settings={settings}
+                  onPlayPause={onPlayPause}
+                  onNext={onNext}
+                  onPrev={onPrev}
+                  onVolumeChange={onVolumeChange}
+                  onSeek={onSeek}
+                />
+              </div>
+            )}
+
+            {/* ── Beta Agent Panel ── */}
+            <BetaAgentPanel
+              settings={settings}
+              onSettingsChange={onSettingsChange}
+            />
+
             {/* ── Sliders ── */}
             <div className="cc-sliders">
               <div className="cc-slider-row">
@@ -495,7 +519,10 @@ export default function ControlCenter({
                 </div>
                 <div className="cc-batt-meta">
                   <span className="cc-batt-pct">{level}%</span>
-                  <span className="cc-batt-state">{charging ? 'Charging' : 'Discharging'}</span>
+                  <span className="cc-batt-state">
+                    {charging ? 'Charging' : acConnected ? 'Plugged In' : 'Discharging'}
+                    {timeRemaining && ` · ${timeRemaining}`}
+                  </span>
                 </div>
               </div>
               <div className="cc-batt-history">
@@ -508,21 +535,6 @@ export default function ControlCenter({
             <div className="cc-handle" />
           </div>
         </div>
-
-        {/* ── Beta Agent Panel (shows when betaModeEnabled) ── */}
-        {settings.betaModeEnabled && (
-          <BetaAgentPanel
-            settings={settings}
-            setSetting={setSetting}
-            onOpenSettings={onOpenSettings}
-            media={media}
-            mediaVolume={mediaVolume}
-            onVolumeChange={onVolumeChange}
-            onPlayPause={onPlayPause}
-            onNext={onNext}
-            onPrev={onPrev}
-          />
-        )}
       </div>
     </>
   )
@@ -530,219 +542,66 @@ export default function ControlCenter({
 
 // ─── Beta Agent Panel ─────────────────────────────────────────────────────────
 
-function BetaAgentPanel({ settings, setSetting, onOpenSettings, media, mediaVolume, onVolumeChange, onPlayPause, onNext, onPrev }) {
-  const handleVolumeInput = (e) => onVolumeChange?.(Number(e.target.value))
+function BetaAgentPanel({ settings = {}, onSettingsChange }) {
+  const enabled = settings.betaModeEnabled
 
   return (
-    <div className="beta-panel" role="region" aria-label="Beta Agent Settings">
+    <div className="cc-beta-card">
       {/* Header */}
-      <div className="beta-panel-header">
-        <div className="beta-panel-header-left">
-          <span className="beta-panel-icon">⚡</span>
-          <span className="beta-panel-title">Beta Agent</span>
+      <div className="cc-beta-card-header" style={{ borderBottom: enabled ? '1px solid rgba(124, 106, 247, 0.12)' : 'none', paddingBottom: enabled ? '10px' : '0' }}>
+        <div className="cc-beta-card-title-wrap">
+          <span className="cc-beta-card-icon">⚡</span>
+          <span className="cc-beta-card-title">Beta Agent</span>
         </div>
-        <div className="beta-panel-header-right">
-          <span className="beta-status-dot" />
-          <span className="beta-status-text">Active</span>
+        <div className="cc-beta-card-status">
+          <span className={`cc-beta-card-dot ${enabled ? 'active' : 'inactive'}`} />
+          <span className="cc-beta-card-text" style={{ color: enabled ? '#4ade80' : 'var(--color-text-muted)', fontSize: '10px' }}>
+            {enabled ? 'Voice Active' : 'Text Only'}
+          </span>
+          <div
+            className={`cc-beta-card-toggle ${enabled ? 'on' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onSettingsChange?.(prev => {
+                const nextVal = !prev.betaModeEnabled
+                return { ...prev, betaModeEnabled: nextVal, soundEnabled: nextVal ? true : prev.soundEnabled }
+              })
+            }}
+            role="switch"
+            aria-checked={enabled}
+            tabIndex={0}
+            style={{
+              width: '28px',
+              height: '16px',
+              borderRadius: '8px',
+              background: enabled ? 'var(--color-accent)' : 'rgba(255,255,255,0.08)',
+              border: `1px solid ${enabled ? 'var(--color-accent)' : 'rgba(255,255,255,0.12)'}`,
+              position: 'relative',
+              cursor: 'pointer',
+              marginLeft: '6px'
+            }}
+          >
+            <div style={{
+              position: 'absolute',
+              top: '1px',
+              left: '1px',
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              background: '#fff',
+              transform: enabled ? 'translateX(12px)' : 'none',
+              transition: 'transform 0.2s ease-in-out'
+            }} />
+          </div>
         </div>
       </div>
-
-      {/* ── Music quick-controls ── */}
-      {media && (
-        <div className="beta-music-card">
-          <div className="beta-music-info">
-            <span className="beta-music-title">{media.title || 'No track playing'}</span>
-            <span className="beta-music-artist">{media.artist || 'Media Idle'}</span>
-          </div>
-          <div className="beta-music-controls">
-            <button type="button" className="beta-music-btn" onClick={onPrev} aria-label="Previous">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M6 6h2v12H6zm3.5 6L19 6v12z"/></svg>
-            </button>
-            <button type="button" className="beta-music-btn play" onClick={onPlayPause} aria-label="Play/Pause">
-              {media.isPlaying
-                ? <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                : <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>
-              }
-            </button>
-            <button type="button" className="beta-music-btn" onClick={onNext} aria-label="Next">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-            </button>
-          </div>
-          <div className="beta-vol-row">
-            <span className="beta-vol-icon">{mediaVolume === 0 ? '🔇' : mediaVolume < 40 ? '🔈' : '🔊'}</span>
-            <input type="range" min={0} max={100} value={mediaVolume}
-              onChange={handleVolumeInput} className="beta-vol-slider" aria-label="Volume" />
-            <span className="beta-vol-val">{mediaVolume}%</span>
-          </div>
-        </div>
-      )}
 
       {/* ── AI Agent Panel ── */}
-      <div className="beta-agent-wrapper" style={{ padding: '0 18px 12px', borderBottom: '1px solid rgba(124, 106, 247, 0.15)' }}>
-        <AgentPanel />
-      </div>
-
-      {/* ── CONNECTIONS ── */}
-      <div className="beta-section-title">CONNECTIONS</div>
-
-      <BetaRow
-        icon="🔗"
-        label="Integrations"
-        value={settings.agentIntegrationsEnabled ? 'Active' : 'Disabled'}
-        valueColor={settings.agentIntegrationsEnabled ? '#4ade80' : undefined}
-        hasArrow
-        onClick={() => onOpenSettings?.('connectors')}
-      />
-
-      {/* ── CUSTOMIZATION ── */}
-      <div className="beta-section-title" style={{ marginTop: '10px' }}>CUSTOMIZATION</div>
-
-      <BetaRow
-        icon="⌨️"
-        label="Shortcuts"
-        hasArrow
-        onClick={() => onOpenSettings?.('shortcuts')}
-      />
-
-      <BetaRow
-        icon="🎤"
-        label="Voice"
-        value={settings.voiceProfile || 'Default'}
-        hasArrow
-        onClick={() => {/* voice config coming soon */}}
-      />
-
-      <BetaRow
-        icon="🎙️"
-        label="Microphone"
-        value={settings.microphoneSource || 'System Default'}
-        hasArrow
-        onClick={() => {/* microphone config coming soon */}}
-      />
-
-      <BetaRow
-        icon="📁"
-        label="Agent Folder"
-        value={settings.agentFolder || 'Default'}
-        hasArrow
-        onClick={() => {/* folder picker coming soon */}}
-      />
-
-      <BetaRow
-        icon="🔐"
-        label="Agent Permissions"
-        value={settings.agentPermissionsEnabled ? 'Allowed' : 'Restricted'}
-        valueColor={settings.agentPermissionsEnabled ? '#4ade80' : '#f87171'}
-        hasToggle
-        toggleValue={settings.agentPermissionsEnabled}
-        onToggle={(v) => setSetting('agentPermissionsEnabled', v)}
-      />
-
-      <BetaRow
-        icon="🔊"
-        label="Sound Effects"
-        hint="Play chimes and notifications"
-        hasToggle
-        toggleValue={settings.soundEnabled}
-        onToggle={(v) => setSetting('soundEnabled', v)}
-      />
-
-      <BetaRow
-        icon="📌"
-        label="Show in Dock"
-        hint="Keep notch visible in taskbar"
-        hasToggle
-        toggleValue={settings.showInDock}
-        onToggle={(v) => {
-          setSetting('showInDock', v)
-          window.electronAPI?.setShowInTaskbar?.(v)
-        }}
-      />
-
-      <BetaRow
-        icon="📹"
-        label="Show in Screen Recordings"
-        hint="Allow capture tools to see the notch"
-        hasToggle
-        toggleValue={settings.showInScreenRecordings}
-        onToggle={(v) => setSetting('showInScreenRecordings', v)}
-      />
-
-      {/* ── UPDATES & SUPPORT ── */}
-      <div className="beta-section-title" style={{ marginTop: '10px' }}>UPDATES & SUPPORT</div>
-
-      <BetaRow
-        icon="🔄"
-        label="Auto Check Updates"
-        hasToggle
-        toggleValue={settings.autoCheckUpdates !== false}
-        onToggle={(v) => setSetting('autoCheckUpdates', v)}
-      />
-
-      <BetaRow
-        icon="ℹ️"
-        label="About Edge Go"
-        hasArrow
-        onClick={() => onOpenSettings?.('about')}
-      />
-
-      <div className="beta-panel-footer">
-        <span>Edge Go Beta</span>
-        <span style={{ opacity: 0.4 }}>•</span>
-        <span style={{ color: 'var(--color-accent)' }}>v1.7.0</span>
-      </div>
-    </div>
-  )
-}
-
-// ─── Beta Row Item ─────────────────────────────────────────────────────────────
-
-function BetaRow({ icon, label, hint, value, valueColor, hasArrow, hasToggle, toggleValue, onToggle, onClick }) {
-  return (
-    <div
-      className={`beta-row ${onClick || hasArrow ? 'clickable' : ''}`}
-      onClick={onClick}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
-    >
-      <div className="beta-row-left">
-        <span className="beta-row-icon">{icon}</span>
-        <div className="beta-row-text">
-          <span className="beta-row-label">{label}</span>
-          {hint && <span className="beta-row-hint">{hint}</span>}
+      {enabled && (
+        <div className="beta-agent-wrapper" style={{ padding: '4px 0 0' }}>
+          <AgentPanel settings={settings} />
         </div>
-      </div>
-      <div className="beta-row-right">
-        {value && (
-          <span className="beta-row-value" style={valueColor ? { color: valueColor } : undefined}>
-            {value}
-          </span>
-        )}
-        {hasToggle && (
-          <BetaToggle value={toggleValue} onChange={onToggle} />
-        )}
-        {hasArrow && !hasToggle && (
-          <span className="beta-row-chevron">›</span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ─── Beta Toggle ──────────────────────────────────────────────────────────────
-
-function BetaToggle({ value, onChange }) {
-  return (
-    <div
-      className={`beta-toggle ${value ? 'on' : ''}`}
-      onClick={(e) => { e.stopPropagation(); onChange?.(!value) }}
-      role="switch"
-      aria-checked={value}
-      tabIndex={0}
-      onKeyDown={(e) => e.key === ' ' && (e.stopPropagation(), onChange?.(!value))}
-    >
-      <div className="beta-toggle-thumb" />
+      )}
     </div>
   )
 }

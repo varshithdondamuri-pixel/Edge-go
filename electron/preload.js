@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   quit: () => ipcRenderer.send('quit-app'),
 
   // Settings sync
+  getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings) => ipcRenderer.send('update-settings', settings),
 
   // Events from main → renderer
@@ -73,6 +74,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Agent Communication
   sendAgentPrompt: (text) => ipcRenderer.send('send-agent-prompt', text),
   setWakeWord: (enabled) => ipcRenderer.send('set-wake-word', enabled),
+  setVoiceListenerSuspended: (suspended) => ipcRenderer.send('set-voice-listener-suspended', suspended),
   onAgentMsg: (cb) => {
     const handler = (_event, data) => cb(data)
     ipcRenderer.on('agent-msg', handler)

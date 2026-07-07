@@ -1,7 +1,7 @@
 export const DEFAULT_SETTINGS = Object.freeze({
   launchAtStartup: false,
   alwaysOnTop: true,
-  showInTaskbar: false,
+  showInTaskbar: true,
   notchPosition: 'center',
   use24h: true,
   language: 'en',

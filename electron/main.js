@@ -40,8 +40,7 @@ app.on('second-instance', () => {
   // focus the existing main window instead of spawning a duplicate.
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
+    showMainWindow()
   }
 })
 
@@ -56,12 +55,45 @@ let lastSmtcNonEmptyAt = 0
 let spotifyFallbackActive = false
 let pendingVolumeFallbackTimer = null
 let boundsTimeout = null
+
+let SETTINGS_PATH = null
+function getSettingsPath() {
+  if (!SETTINGS_PATH) {
+    SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json')
+  }
+  return SETTINGS_PATH
+}
+
+function loadSettings() {
+  try {
+    const sp = getSettingsPath()
+    if (fs.existsSync(sp)) {
+      const data = fs.readFileSync(sp, 'utf8')
+      return JSON.parse(data) || {}
+    }
+  } catch (e) {
+    console.error('[Settings] Failed to load settings:', e.message)
+  }
+  return {}
+}
+
+function saveSettings(settings) {
+  try {
+    const sp = getSettingsPath()
+    fs.writeFileSync(sp, JSON.stringify(settings, null, 2), 'utf8')
+  } catch (e) {
+    console.error('[Settings] Failed to save settings:', e.message)
+  }
+}
+
+const savedSettings = loadSettings()
+
 // Tracks the notch's saved position so restores are correct
 const notchState = {
-  position: 'center',
-  collapsedWidth: 300,
-  expandedWidth: 620,
-  state: 'merged',
+  position: ['left', 'center', 'right'].includes(savedSettings.notchPosition) ? savedSettings.notchPosition : 'center',
+  collapsedWidth: Math.min(440, Math.max(240, Number(savedSettings.collapsedWidth) || 300)),
+  expandedWidth: Math.min(800, Math.max(500, Number(savedSettings.expandedWidth) || 620)),
+  state: 'collapsed',
   controlCenterOpen: false,
   controlCenterDocked: false,
   panelLocked: false,
@@ -77,9 +109,9 @@ const systemControlState = {
 }
 
 const windowSettingsState = {
-  alwaysOnTop: true,
-  showInTaskbar: false,
-  enableWindowShadow: true,
+  alwaysOnTop: typeof savedSettings.alwaysOnTop === 'boolean' ? savedSettings.alwaysOnTop : true,
+  showInTaskbar: typeof savedSettings.showInTaskbar === 'boolean' ? savedSettings.showInTaskbar : true,
+  enableWindowShadow: typeof savedSettings.enableWindowShadow === 'boolean' ? savedSettings.enableWindowShadow : true,
 }
 
 const NOTCH_MERGED_HEIGHT = 36
@@ -218,9 +250,12 @@ function applyNotchBounds(animate = true) {
   }
   // Control Center closed — restore click-through for the notch
   mainWindow.setIgnoreMouseEvents(false) // notch still needs hover
-  if (mainWindow.isFocusable()) {
-    mainWindow.setFocusable(false)
-  }
+  try {
+    const shouldBeFocusable = notchState.state !== 'merged'
+    if (mainWindow.isFocusable() !== shouldBeFocusable) {
+      mainWindow.setFocusable(shouldBeFocusable)
+    }
+  } catch {}
 
   let width = notchState.collapsedWidth
   let height = NOTCH_COLLAPSED_HEIGHT
@@ -242,7 +277,7 @@ function applyNotchBounds(animate = true) {
   }
 
   const currentBounds = mainWindow.getBounds()
-  const isExpanding = (width > currentBounds.width || height > currentBounds.height)
+  const isExpanding = (width > currentBounds.width || height > currentBounds.height || x !== currentBounds.x)
 
   if (isExpanding) {
     mainWindow.setBounds({ width, height, x, y: notchY }, false)
@@ -253,6 +288,24 @@ function applyNotchBounds(animate = true) {
       }
     }, 350)
   }
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  if (!notchState.controlCenterOpen && notchState.state === 'merged') {
+    notchState.state = 'collapsed'
+  }
+
+  try { mainWindow.setFocusable(true) } catch {}
+  try { mainWindow.setSkipTaskbar(!windowSettingsState.showInTaskbar) } catch {}
+
+  mainWindow.show()
+  applyNotchBounds(false)
+  mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
+
+  try { mainWindow.moveTop() } catch {}
+  try { mainWindow.focus() } catch {}
 }
 
 function sanitizeSettings(settings = {}) {
@@ -285,14 +338,12 @@ function createWindow() {
     backgroundColor: '#00000000',
     thickFrame: false,
     alwaysOnTop: true,
-    skipTaskbar: true,
+    skipTaskbar: !windowSettingsState.showInTaskbar,
     resizable: false,
     movable: true,
     hasShadow: false,
     show: false,
-    // Start non-focusable so notch doesn't steal focus.
-    // We toggle focusable=true when Control Center opens.
-    focusable: false,
+    focusable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -303,9 +354,9 @@ function createWindow() {
 
   // Load app
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL('http://localhost:5173').catch(err => console.error('Failed to load main window:', err))
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html')).catch(err => console.error('Failed to load main window:', err))
   }
 
   if (isDev) {
@@ -313,22 +364,18 @@ function createWindow() {
   }
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-    mainWindow.setAlwaysOnTop(windowSettingsState.alwaysOnTop, 'screen-saver')
     // setVisibleOnAllWorkspaces is macOS-only — skip on Windows to avoid errors
     if (process.platform !== 'win32') {
       try { mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) } catch {}
     }
-    // Ensure correct initial bounds after renderer loads
-    applyNotchBounds(false)
+    showMainWindow()
   })
 
   mainWindow.on('blur', () => {
     if (mainWindow && !mainWindow.isDestroyed() && windowSettingsState.alwaysOnTop) {
       mainWindow.setAlwaysOnTop(true, 'screen-saver')
     }
-    // When window loses focus and CC is not open, restore non-focusable mode
-    if (!notchState.controlCenterOpen) {
+    if (!notchState.controlCenterOpen && notchState.state === 'merged') {
       try { mainWindow.setFocusable(false) } catch {}
     }
   })
@@ -369,9 +416,9 @@ function createSettingsWindow(tab = 'general') {
   })
 
   if (isDev) {
-    settingsWindow.loadURL(`http://localhost:5173/#settings?tab=${tab}`)
+    settingsWindow.loadURL(`http://localhost:5173/#settings?tab=${tab}`).catch(err => console.error('Failed to load settings window:', err))
   } else {
-    settingsWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: `settings?tab=${tab}` })
+    settingsWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: `settings?tab=${tab}` }).catch(err => console.error('Failed to load settings window:', err))
   }
 
   settingsWindow.once('ready-to-show', () => {
@@ -406,7 +453,7 @@ function createTray() {
         click: () => {
           if (!mainWindow) return
           if (mainWindow.isVisible()) mainWindow.hide()
-          else mainWindow.show()
+          else showMainWindow()
           tray.setContextMenu(buildMenu())
         },
       },
@@ -428,7 +475,7 @@ function createTray() {
   tray.on('click', () => {
     if (!mainWindow) return
     if (mainWindow.isVisible()) mainWindow.hide()
-    else mainWindow.show()
+    else showMainWindow()
     tray.setContextMenu(buildMenu())
   })
 }
@@ -436,26 +483,80 @@ function createTray() {
 // ─── IPC: Battery ─────────────────────────────────────────────────────────
 
 ipcMain.handle('get-battery', async () => {
+  if (process.platform === 'darwin') {
+    return new Promise((resolve) => {
+      exec('pmset -g batt', (err, stdout) => {
+        if (err || !stdout) {
+          return resolve({ level: 100, charging: false, available: false, acConnected: false, timeRemaining: '' })
+        }
+        try {
+          const lines = stdout.split('\n')
+          const firstLine = lines[0] || ''
+          const secondLine = lines[1] || ''
+          
+          const acConnected = firstLine.includes('AC Power')
+          
+          const levelMatch = secondLine.match(/(\d+)%/)
+          const level = levelMatch ? parseInt(levelMatch[1], 10) : 100
+          
+          const charging = secondLine.includes('charging')
+          
+          let timeRemaining = ''
+          const timeMatch = secondLine.match(/(\d+:\d+)\s+(remaining|until\s+full)/)
+          if (timeMatch) {
+            const parts = timeMatch[1].split(':')
+            const h = parseInt(parts[0], 10)
+            const m = parseInt(parts[1], 10)
+            timeRemaining = h > 0 ? `${h}h ${m}m` : `${m}m`
+          } else if (secondLine.includes('no estimate') || secondLine.includes('calculating')) {
+            timeRemaining = 'Estimating...'
+          }
+          
+          resolve({
+            level,
+            charging,
+            available: true,
+            acConnected,
+            timeRemaining
+          })
+        } catch (e) {
+          resolve({ level: 100, charging: false, available: false, acConnected: false, timeRemaining: '' })
+        }
+      })
+    })
+  }
+
   if (process.platform !== 'win32') {
-    return { level: 100, charging: false, available: false }
+    return { level: 100, charging: false, available: false, acConnected: false, timeRemaining: '' }
   }
   try {
     const out = await runPowerShell(`
 $battery = Get-CimInstance Win32_Battery | Select-Object -First 1
 if ($battery) {
+  $charging = ($battery.BatteryStatus -eq 2 -or $battery.BatteryStatus -eq 6 -or $battery.BatteryStatus -eq 7 -or $battery.BatteryStatus -eq 8 -or $battery.BatteryStatus -eq 9)
+  $ac = ($battery.BatteryStatus -ne 1)
+  $mins = $battery.EstimatedRunTime
+  $timeRemaining = ""
+  if ($mins -and $mins -lt 71582788 -and $mins -gt 0) {
+    $h = [math]::Floor($mins / 60)
+    $m = $mins % 60
+    if ($h -gt 0) { $timeRemaining = "$($h)h $($m)m" } else { $timeRemaining = "$($m)m" }
+  }
   [PSCustomObject]@{
     level = [int]$battery.EstimatedChargeRemaining
-    charging = ($battery.BatteryStatus -eq 2 -or $battery.BatteryStatus -eq 6 -or $battery.BatteryStatus -eq 7 -or $battery.BatteryStatus -eq 8 -or $battery.BatteryStatus -eq 9)
+    charging = $charging
     available = $true
+    acConnected = $ac
+    timeRemaining = $timeRemaining
   } | ConvertTo-Json -Compress
 } else {
-  [PSCustomObject]@{ level = 100; charging = $false; available = $false } | ConvertTo-Json -Compress
+  [PSCustomObject]@{ level = 100; charging = $false; available = $false; acConnected = $false; timeRemaining = "" } | ConvertTo-Json -Compress
 }
 `)
     return JSON.parse(out.trim())
   } catch (e) {
     console.error('get-battery error:', e.message)
-    return { level: 100, charging: false, available: false }
+    return { level: 100, charging: false, available: false, acConnected: false, timeRemaining: '' }
   }
 })
 
@@ -1217,67 +1318,82 @@ while ($true) {
 
   const encoded = Buffer.from(psScript, 'utf16le').toString('base64')
   const { spawn } = require('child_process')
-  winMediaProcess = spawn('powershell', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass',
-    '-EncodedCommand',
-    encoded,
-  ], { windowsHide: true })
+  
+  try {
+    winMediaProcess = spawn('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-EncodedCommand',
+      encoded,
+    ], { windowsHide: true })
 
-  let buffer = ''
-  winMediaProcess.stdout.on('data', (data) => {
-    buffer += data.toString()
-    const lines = buffer.split('\n')
-    buffer = lines.pop()
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('VOLUME_CHANGE:')) {
-        const vol = Number(trimmed.slice('VOLUME_CHANGE:'.length))
-        if (!isNaN(vol)) {
-          broadcastVolume(vol)
-        }
-        continue
-      }
-      if (trimmed.startsWith('MEDIA_JSON:')) {
-        try {
-          const parsed = JSON.parse(trimmed.slice('MEDIA_JSON:'.length))
-          const sessions = Array.isArray(parsed) ? parsed.map(s => ({
-            title:       s.title       || 'Unknown Title',
-            artist:      s.artist      || '',
-            album:       s.album       || '',
-            albumArt:    s.albumArt    || null,
-            duration:    Number(s.duration)  || 0,
-            position:    Number(s.position)  || 0,
-            isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
-            volume:      (s.volume !== undefined && s.volume !== null) ? Number(s.volume) : lastKnownVolume,
-            source:      s.source      || 'Media',
-            sourceAppId: s.sourceAppId || '',
-            isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
-          })) : []
-          if (sessions.length > 0) {
-            lastSmtcNonEmptyAt = Date.now()
-            spotifyFallbackActive = false
+    winMediaProcess.on('error', (err) => {
+      console.error('[SMTC] Daemon spawn error:', err.message)
+      winMediaProcess = null
+      startSpotifyFallbackPoller()
+    })
+  } catch (err) {
+    console.error('[SMTC] Exception spawning daemon:', err.message)
+    winMediaProcess = null
+    startSpotifyFallbackPoller()
+  }
+
+  if (winMediaProcess) {
+    let buffer = ''
+    winMediaProcess.stdout.on('data', (data) => {
+      buffer += data.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith('VOLUME_CHANGE:')) {
+          const vol = Number(trimmed.slice('VOLUME_CHANGE:'.length))
+          if (!isNaN(vol)) {
+            broadcastVolume(vol)
           }
-          pushMediaUpdate(sessions)
-        } catch (e) {
-          console.error('[SMTC] JSON parse error:', e.message)
+          continue
+        }
+        if (trimmed.startsWith('MEDIA_JSON:')) {
+          try {
+            const parsed = JSON.parse(trimmed.slice('MEDIA_JSON:'.length))
+            const sessions = Array.isArray(parsed) ? parsed.map(s => ({
+              title:       s.title       || 'Unknown Title',
+              artist:      s.artist      || '',
+              album:       s.album       || '',
+              albumArt:    s.albumArt    || null,
+              duration:    Number(s.duration)  || 0,
+              position:    Number(s.position)  || 0,
+              isPlaying:   s.isPlaying === true || s.isPlaying === 'true',
+              volume:      (s.volume !== undefined && s.volume !== null) ? Number(s.volume) : lastKnownVolume,
+              source:      s.source      || 'Media',
+              sourceAppId: s.sourceAppId || '',
+              isCurrent:   s.isCurrent === true || s.isCurrent === 'true',
+            })) : []
+            if (sessions.length > 0) {
+              lastSmtcNonEmptyAt = Date.now()
+              spotifyFallbackActive = false
+            }
+            pushMediaUpdate(sessions)
+          } catch (e) {
+            console.error('[SMTC] JSON parse error:', e.message)
+          }
         }
       }
-    }
-  })
+    })
 
-  winMediaProcess.stderr.on('data', (data) => {
-    const msg = data.toString().trim()
-    if (msg) console.warn('[SMTC stderr]', msg)
-  })
+    winMediaProcess.stderr.on('data', (data) => {
+      const msg = data.toString().trim()
+      if (msg) console.warn('[SMTC stderr]', msg)
+    })
 
-  winMediaProcess.on('close', (code) => {
-    console.log(`[SMTC] daemon exited (code=${code}), restarting in 5s…`)
-    if (app.isReady() && !app.isQuitting) {
-      setTimeout(startWindowsMediaDaemon, 5000)
-    }
-  })
+    winMediaProcess.on('close', (code) => {
+      console.log(`[SMTC] daemon exited (code=${code}), restarting in 5s…`)
+      if (app.isReady() && !app.isQuitting) {
+        setTimeout(startWindowsMediaDaemon, 5000)
+      }
+    })
+  }
 
   startSpotifyFallbackPoller()
 }
@@ -1514,11 +1630,22 @@ ipcMain.on('media-command', (_, command, value, source) => {
 
 ipcMain.on('update-settings', (event, settings) => {
   const next = sanitizeSettings(settings)
+  saveSettings(next)
   notchState.position = next.notchPosition
   notchState.collapsedWidth = next.collapsedWidth
   notchState.expandedWidth = next.expandedWidth
   applyWindowEffects(next)
   applyNotchBounds(true)
+
+  // Dynamically start/stop the agent daemon on setting changes
+  if (next.betaModeEnabled) {
+    startAgentDaemon()
+  } else if (agentProcess) {
+    try {
+      agentProcess.kill()
+    } catch {}
+    agentProcess = null
+  }
 
   BrowserWindow.getAllWindows().forEach(win => {
     if (!win.isDestroyed() && win.webContents !== event.sender) {
@@ -1527,7 +1654,7 @@ ipcMain.on('update-settings', (event, settings) => {
   })
 })
 
-ipcMain.handle('get-settings', () => null)
+ipcMain.handle('get-settings', () => loadSettings())
 
 // ─── IPC: Clipboard ─────────────────────────────────────────────────────────
 
@@ -1587,8 +1714,7 @@ ipcMain.on('set-control-center', (_, isOpen) => {
     // Make window focusable so sliders/inputs work in the Control Center
     try { mainWindow.setFocusable(true) } catch {}
   } else {
-    // Restore non-focusable so the notch bar doesn't steal window focus
-    try { mainWindow.setFocusable(false) } catch {}
+    try { mainWindow.setFocusable(notchState.state !== 'merged') } catch {}
   }
   applyNotchBounds(true)
 })
@@ -1690,106 +1816,183 @@ function createPointerOverlayWindow() {
 
   pointerOverlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
-  const overlayUrl = isDev
-    ? 'http://localhost:5173/?overlay=true'
-    : `file://${path.join(__dirname, '../dist/index.html')}?overlay=true`
-
-  pointerOverlayWindow.loadURL(overlayUrl)
+  if (isDev) {
+    pointerOverlayWindow.loadURL('http://localhost:5173/?overlay=true').catch(err => console.error('Failed to load pointer overlay:', err))
+  } else {
+    pointerOverlayWindow.loadFile(path.join(__dirname, '../dist/index.html'), { search: 'overlay=true' }).catch(err => console.error('Failed to load pointer overlay:', err))
+  }
 
   pointerOverlayWindow.on('closed', () => {
     pointerOverlayWindow = null
   })
 }
 
+function getResolvedPath(filePath) {
+  if (filePath.includes('app.asar')) {
+    return filePath.replace('app.asar', 'app.asar.unpacked')
+  }
+  return filePath
+}
+
 function startAgentDaemon() {
   if (agentProcess) return
 
-  const daemonPath = path.join(__dirname, 'agent_daemon.py')
+  const daemonPath = getResolvedPath(path.join(__dirname, 'agent_daemon.py'))
   
-  let pythonCmd = 'python3'
-  if (process.platform === 'win32') {
-    pythonCmd = 'python'
-  }
-
-  const envCopy = { ...process.env }
-  try {
-    const dotenvPath = path.join(__dirname, '../.env')
-    if (fs.existsSync(dotenvPath)) {
-      const dotenvContent = fs.readFileSync(dotenvPath, 'utf-8')
-      dotenvContent.split('\n').forEach(line => {
-        const parts = line.split('=')
-        if (parts.length >= 2) {
-          const key = parts[0].trim()
-          const val = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '')
-          if (key) envCopy[key] = val
+  // Try platform default python cmd, but fall back if it fails
+  const pythonCmds = process.platform === 'win32' ? ['python', 'python3', 'py'] : ['python3', 'python']
+  let daemonStartedSuccessfully = false
+  
+  function trySpawn(index) {
+    if (index >= pythonCmds.length) {
+      console.error('[Agent Daemon] All python commands failed. Agent daemon cannot be started.')
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('agent-msg', {
+            type: 'status',
+            state: 'offline'
+          })
+          win.webContents.send('agent-msg', {
+            type: 'error',
+            message: 'Failed to start Python Agent daemon. Please ensure Python is installed and added to PATH.'
+          })
         }
       })
+      return
     }
-  } catch (e) {
-    console.warn('[Agent Daemon] Error loading local .env:', e.message)
-  }
-
-  envCopy.PYTHONUNBUFFERED = '1'
-  agentProcess = spawn(pythonCmd, ['-u', daemonPath], {
-    env: envCopy
-  })
-
-  let buffer = ''
-  agentProcess.stdout.on('data', (data) => {
-    buffer += data.toString()
-    const lines = buffer.split('\n')
-    buffer = lines.pop()
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
+    
+    const cmd = pythonCmds[index]
+    console.log(`[Agent Daemon] Trying to spawn with: ${cmd}`)
+    
+    // Broadcast connecting state to renderer
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('agent-msg', { type: 'status', state: 'connecting' })
+      }
+    })
+    
+    const envCopy = { ...process.env }
+    const dotenvPaths = [
+      path.join(__dirname, '../.env'),
+      path.join(path.dirname(process.execPath), '.env'),
+      path.join(app.getPath('userData'), '.env')
+    ]
+    for (const dotenvPath of dotenvPaths) {
       try {
-        const payload = JSON.parse(trimmed)
-        
-        if (payload.type === 'wake') {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.show()
-            notchState.state = 'expanded'
-            applyNotchBounds(true)
-            mainWindow.webContents.send('agent-msg', payload)
-          }
-        } else if (payload.type === 'pointer_animation') {
-          if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
-            const cursor = screen.getCursorScreenPoint()
-            payload.startX = cursor.x
-            payload.startY = cursor.y
-            pointerOverlayWindow.show()
-            pointerOverlayWindow.webContents.send('agent-msg', payload)
-            setTimeout(() => {
-              if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
-                pointerOverlayWindow.hide()
-              }
-            }, 3000)
-          }
-        } else {
-          BrowserWindow.getAllWindows().forEach(win => {
-            if (!win.isDestroyed()) {
-              win.webContents.send('agent-msg', payload)
+        if (fs.existsSync(dotenvPath)) {
+          const dotenvContent = fs.readFileSync(dotenvPath, 'utf-8')
+          dotenvContent.split('\n').forEach(line => {
+            const parts = line.split('=')
+            if (parts.length >= 2) {
+              const key = parts[0].trim()
+              const val = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '')
+              if (key) envCopy[key] = val
             }
           })
         }
       } catch (e) {
-        console.warn('[Agent stdout JSON error]:', trimmed, e.message)
+        console.warn(`[Agent Daemon] Error loading .env from ${dotenvPath}:`, e.message)
       }
     }
-  })
 
-  agentProcess.stderr.on('data', (data) => {
-    const msg = data.toString().trim()
-    if (msg) console.warn('[Agent daemon stderr]', msg)
-  })
-
-  agentProcess.on('close', (code) => {
-    console.log(`[Agent daemon] exited (code=${code}), restarting in 5s…`)
-    agentProcess = null
-    if (app.isReady() && !app.isQuitting) {
-      setTimeout(startAgentDaemon, 5000)
+    envCopy.PYTHONUNBUFFERED = '1'
+    
+    let spawnedProcess;
+    try {
+      spawnedProcess = spawn(cmd, ['-u', daemonPath], {
+        env: envCopy
+      })
+    } catch (err) {
+      console.warn(`[Agent Daemon] Spawn error with ${cmd}:`, err.message)
+      trySpawn(index + 1)
+      return
     }
-  })
+
+    let buffer = ''
+    spawnedProcess.stdout.on('data', (data) => {
+      buffer += data.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop()
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          const payload = JSON.parse(trimmed)
+          if (payload.type === 'ready') {
+            daemonStartedSuccessfully = true
+          }
+          if (payload.type === 'wake') {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              notchState.state = 'expanded'
+              showMainWindow()
+              applyNotchBounds(true)
+              mainWindow.webContents.send('agent-msg', payload)
+            }
+          } else if (payload.type === 'pointer_animation') {
+            if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+              const cursor = screen.getCursorScreenPoint()
+              payload.startX = cursor.x
+              payload.startY = cursor.y
+              pointerOverlayWindow.show()
+              pointerOverlayWindow.webContents.send('agent-msg', payload)
+              setTimeout(() => {
+                if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+                  pointerOverlayWindow.hide()
+                }
+              }, 3000)
+            }
+          } else {
+            BrowserWindow.getAllWindows().forEach(win => {
+              if (!win.isDestroyed()) {
+                win.webContents.send('agent-msg', payload)
+              }
+            })
+          }
+        } catch (e) {
+          console.warn('[Agent stdout JSON error]:', trimmed, e.message)
+        }
+      }
+    })
+
+    spawnedProcess.stderr.on('data', (data) => {
+      const msg = data.toString().trim()
+      if (msg) console.warn('[Agent daemon stderr]', msg)
+    })
+
+    spawnedProcess.on('error', (err) => {
+      console.warn(`[Agent Daemon] Process error with ${cmd}:`, err.message)
+      if (agentProcess === spawnedProcess) {
+        agentProcess = null
+      }
+      // If it failed to spawn immediately, try next command
+      trySpawn(index + 1)
+    })
+
+    spawnedProcess.on('close', (code) => {
+      console.log(`[Agent daemon] exited (code=${code})`)
+      if (agentProcess === spawnedProcess) {
+        agentProcess = null
+        if (!daemonStartedSuccessfully) {
+          console.warn(`[Agent Daemon] Command '${cmd}' failed during startup (code=${code}). Trying next command...`)
+          trySpawn(index + 1)
+        } else {
+          BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+              win.webContents.send('agent-msg', { type: 'status', state: 'offline' })
+            }
+          })
+          if (app.isReady() && !app.isQuitting) {
+            console.log('[Agent daemon] Restarting in 5s…')
+            setTimeout(startAgentDaemon, 5000)
+          }
+        }
+      }
+    })
+
+    agentProcess = spawnedProcess
+  }
+
+  trySpawn(0)
 }
 
 ipcMain.on('send-agent-prompt', (_, text) => {
@@ -1824,6 +2027,17 @@ ipcMain.on('set-wake-word', (_, enabled) => {
   }
 })
 
+ipcMain.on('set-voice-listener-suspended', (_, suspended) => {
+  if (agentProcess && agentProcess.stdin && !agentProcess.stdin.destroyed) {
+    try {
+      const payload = JSON.stringify({ type: 'suspend_voice_listener', suspended })
+      agentProcess.stdin.write(payload + '\n')
+    } catch (e) {
+      console.error('[Agent daemon] Stdin write error:', e.message)
+    }
+  }
+})
+
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -1835,7 +2049,9 @@ app.whenReady().then(() => {
   }
 
   startWindowsMediaDaemon()   // no-op on non-Windows
-  startAgentDaemon()
+  if (savedSettings.betaModeEnabled) {
+    startAgentDaemon()
+  }
   createWindow()
   createPointerOverlayWindow()
 
@@ -1849,7 +2065,7 @@ app.whenReady().then(() => {
   globalShortcut.register('Super+Alt+E', () => {
     if (!mainWindow) return
     if (mainWindow.isVisible()) mainWindow.hide()
-    else mainWindow.show()
+    else showMainWindow()
   })
 
   // Win+Alt+S: open settings
@@ -1859,14 +2075,14 @@ app.whenReady().then(() => {
 
   globalShortcut.register('Super+Alt+C', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show()
+      showMainWindow()
       mainWindow.webContents.send('open-control-center')
     }
   })
 
   globalShortcut.register('Super+Alt+V', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show()
+      showMainWindow()
       mainWindow.webContents.send('open-clipboard')
     }
   })

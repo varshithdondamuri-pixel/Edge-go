@@ -1,6 +1,6 @@
 {
   "name": "edge-go",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "description": "Edge Go — a sleek always-on-top floating HUD bar for Windows",
   "main": "electron/main.js",
   "homepage": "./",
@@ -24,11 +24,16 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.png",
-      "executableName": "EdgeGo",
-      "artifactName": "Edge-Go-Setup-${version}.exe"
+      "executableName": "EdgeGo"
     },
     "nsis": {
       "oneClick": false,
@@ -46,7 +51,16 @@
       "electron/**/*",
       "public/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "README.md",
+      "RELEASE_NOTES.md",
+      "CHANGELOG.md"
+    ],
+    "asarUnpack": [
+      "electron/agent_daemon.py",
+      "README.md",
+      "RELEASE_NOTES.md",
+      "CHANGELOG.md"
     ],
     "directories": {
       "output": "release"

@@ -129,9 +129,9 @@ function AgentPipeline({ agents }) {
 }
 
 /* ── Main Component ─────────────────────────────────────────── */
-export default function AgentPanel() {
+export default function AgentPanel({ settings = {} }) {
   const [prompt, setPrompt]             = useState('')
-  const [status, setStatus]             = useState('online')
+  const [status, setStatus]             = useState('connecting')
   const [thoughts, setThoughts]         = useState('')
   const [response, setResponse]         = useState('')
   const [subagents, setSubagents]       = useState([])
@@ -147,6 +147,57 @@ export default function AgentPanel() {
   const endResponseRef  = useRef(null)
   const inputRef        = useRef(null)
 
+  const speak = useCallback((text) => {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    
+    const cleanText = text
+      .replace(/\*+/g, '')
+      .replace(/#+/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .trim()
+
+    if (!cleanText) return
+
+    const utterance = new SpeechSynthesisUtterance(cleanText)
+    const voices = window.speechSynthesis.getVoices()
+    const profile = settings.voiceProfile || 'Default'
+    
+    let selectedVoice = null
+    if (profile === 'Male') {
+      selectedVoice = voices.find(v => v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('david') || v.name.toLowerCase().includes('google us english male'))
+    } else if (profile === 'Female') {
+      selectedVoice = voices.find(v => v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('google us english female') || v.name.toLowerCase().includes('samantha'))
+    } else if (profile === 'British') {
+      selectedVoice = voices.find(v => v.name.toLowerCase().includes('uk') || v.name.toLowerCase().includes('british') || v.name.toLowerCase().includes('hazel') || v.name.toLowerCase().includes('google uk english'))
+    }
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+    
+    if (profile === 'Robot') {
+      utterance.pitch = 0.5
+      utterance.rate = 0.85
+    } else {
+      utterance.pitch = 1.0
+      utterance.rate = 1.0
+    }
+    
+    utterance.onstart = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(true)
+    }
+    utterance.onend = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(false)
+    }
+    utterance.onerror = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(false)
+    }
+    
+    window.speechSynthesis.speak(utterance)
+  }, [settings.voiceProfile])
+
   /* IPC listener */
   useEffect(() => {
     if (!window.electronAPI?.onAgentMsg) return
@@ -156,8 +207,15 @@ export default function AgentPanel() {
           setStatus('online')
           break
         case 'status':
-          setStatus(data.state === 'thinking' ? 'thinking' : 'online')
-          if (data.state === 'idle') setIsListening(false)
+          if (data.state === 'thinking') setStatus('thinking')
+          else if (data.state === 'offline') setStatus('offline')
+          else if (data.state === 'connecting') setStatus('connecting')
+          else if (data.state === 'idle') {
+            setStatus('online')
+            setIsListening(false)
+          } else {
+            setStatus('online')
+          }
           break
         case 'wake':
           playWakeSound()
@@ -176,6 +234,9 @@ export default function AgentPanel() {
         case 'done':
           setStatus('online')
           setResponse(data.text)
+          if (settings.soundEnabled) {
+            speak(data.text)
+          }
           break
         case 'subagent_start':
           setStatus('running')
@@ -206,6 +267,15 @@ export default function AgentPanel() {
         case 'status_log':
           setLogs(p => [...p, `ℹ ${data.message}`])
           break
+        case 'voice_query':
+          setIsListening(false)
+          setPrompt(data.text)
+          setLogs(p => [...p, `🎙️ Heard: "${data.text}"`])
+          const voicePromptText = data.text
+          setTimeout(() => {
+            submitPromptRef.current(voicePromptText)
+          }, 800)
+          break
         case 'error':
           setStatus('online')
           setLogs(p => [...p, `⚠ Error: ${data.message}`])
@@ -215,17 +285,16 @@ export default function AgentPanel() {
       }
     })
     return () => unsub()
-  }, [])
+  }, [settings.soundEnabled, speak])
 
   useEffect(() => { endThoughtsRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [thoughts])
   useEffect(() => { endResponseRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [response])
 
-  const handleSend = useCallback((e) => {
-    e?.preventDefault()
-    if (!prompt.trim() || status === 'thinking') return
+  const submitPrompt = useCallback((text) => {
+    if (!text.trim() || status === 'thinking') return
 
     // Detect current intent for visual feedback
-    const pl = prompt.toLowerCase()
+    const pl = text.toLowerCase()
     let intent = null
     if (pl.includes('search') || pl.includes('find online')) intent = 'web_search'
     else if (pl.includes('html') || pl.includes('landing page') || pl.includes('webpage')) intent = 'create_html'
@@ -239,15 +308,25 @@ export default function AgentPanel() {
     setThoughts('')
     setResponse('')
     setSubagents([])
-    setLogs([`▶ "${prompt}"`])
+    setLogs([`▶ "${text}"`])
     setSearchResults(null)
     setFileCreated(null)
     setStatus('thinking')
     setIsListening(false)
-    window.electronAPI.sendAgentPrompt(prompt)
+    window.electronAPI.sendAgentPrompt(text)
     setPrompt('')
     inputRef.current?.focus()
-  }, [prompt, status])
+  }, [status])
+
+  const submitPromptRef = useRef(submitPrompt)
+  useEffect(() => {
+    submitPromptRef.current = submitPrompt
+  })
+
+  const handleSend = useCallback((e) => {
+    e?.preventDefault()
+    submitPrompt(prompt)
+  }, [prompt, submitPrompt])
 
   const handleToggleWake = () => {
     const next = !wakeEnabled
@@ -263,6 +342,7 @@ export default function AgentPanel() {
   const quickActions = [
     { label: '🌐 Search web', prompt: 'search the web for ' },
     { label: '🎨 Create HTML', prompt: 'create a landing page for ' },
+    { label: '📊 Create slides', prompt: 'create a presentation about ' },
     { label: '📄 Create doc', prompt: 'create a markdown document: ' },
     { label: '▶️ Play video', prompt: 'play video on YouTube in Brave: ' },
     { label: '🖥️ Open Word', prompt: 'open Microsoft Word' },
@@ -277,10 +357,24 @@ export default function AgentPanel() {
       <div className="cc-agent-header">
         <div className="cc-agent-status">
           <span
-            className={`cc-agent-dot ${isListening ? 'thinking' : isThinking ? 'thinking' : 'online'}`}
+            className={`cc-agent-dot ${
+              isListening
+                ? 'thinking'
+                : isThinking
+                ? 'thinking'
+                : status === 'online'
+                ? 'online'
+                : status === 'connecting'
+                ? 'connecting'
+                : 'offline'
+            }`}
           />
           {isListening
             ? '🎙️ Listening...'
+            : status === 'connecting'
+            ? '⚡ Connecting...'
+            : status === 'offline'
+            ? '❌ Offline'
             : status === 'running'
             ? `🤖 Orchestrating ${subagents.length} agents...`
             : isThinking

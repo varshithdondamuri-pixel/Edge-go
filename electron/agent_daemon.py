@@ -18,6 +18,18 @@ import urllib.error
 import pathlib
 from concurrent.futures import ThreadPoolExecutor
 
+# Thread-safe print override to prevent concurrent stdout stream corruption
+_print = print
+_print_lock = threading.Lock()
+
+def print(*args, **kwargs):
+    with _print_lock:
+        _print(*args, **kwargs)
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+
 # Optional: pywin32 for Microsoft Office COM automation
 try:
     import win32com.client
@@ -56,6 +68,8 @@ except ImportError:
 active_tasks = {}
 wake_word_enabled = True
 wake_word_thread_active = False
+agent_busy = False
+voice_listener_suspended = False
 
 # Stopwords for TF-IDF
 STOPWORDS = {
@@ -74,6 +88,144 @@ def tokenize(text):
     text = re.sub(r'[^\w\s]', ' ', text)
     tokens = text.split()
     return [t for t in tokens if t not in STOPWORDS and len(t) > 1]
+
+def expand_topic_content(title: str, prompt_text: str) -> str:
+    """Generates rich, contextual contents based on the requested title/topic."""
+    prompt_lower = prompt_text.lower()
+    
+    templates = {
+        "fitness": [
+            "# Fitness & Ultimate Physical Well-being Program",
+            "Unlock your body's true potential with our specialized fitness program.",
+            "## 1. Personalized Workouts",
+            "Work with certified coaches to design training routines tailored specifically to your body type, goals, and experience level. Track your progressive overload weekly.",
+            "## 2. Nutritional Strategy",
+            "Fuel your workouts with customized meal planning designed to maximize energy, recovery, and overall metabolic health. Balance macros with protein-dense diets.",
+            "## 3. Mindset & Recovery",
+            "Implement active recovery, flexibility training, and mental health checks to ensure long-term sustainable wellness. Sleep at least 7-8 hours for full muscle synthesis."
+        ],
+        "portfolio": [
+            "# Professional Engineering & Design Portfolio",
+            "Showcasing creative engineering, design, and product development projects.",
+            "## 1. Featured Projects",
+            "Interactive full-stack applications, modern UI system components, and custom AI tooling integrations designed for high performance.",
+            "## 2. Core Expertise",
+            "Proficient in React, Node.js, Electron, Python, and system level integrations with a strong focus on pixel-perfect UX details.",
+            "## 3. Professional Journey",
+            "Dedicated to writing clean, maintainable code, building sleek, hardware-accelerated user interfaces, and automating workflows."
+        ],
+        "cats": [
+            "# Comprehensive Feline Care & Behavior Guide",
+            "Exploring the wonderful world of feline companions, their behavior, care, and breeds.",
+            "## 1. Understanding Cat Behavior",
+            "Learn to read body language, vocalizations, and play habits to build a deeper connection and trust with your pet.",
+            "## 2. Optimal Feline Nutrition",
+            "High-protein dietary needs, hydration tips (using water fountains), and choosing the right food for different life stages.",
+            "## 3. Fun Feline Activities",
+            "Essential toys, scratch posts, cat trees, and interactive play schedules to keep indoor cats active, healthy, and mentally stimulated."
+        ],
+        "business": [
+            "# Business Strategy & Operational Scaling Blueprint",
+            "Innovating and driving growth in modern competitive market spaces.",
+            "## 1. Strategic Planning",
+            "Aligning organizational resources with long-term commercial goals, product-market fit, and emerging industry trends.",
+            "## 2. Operational Excellence",
+            "Optimizing internal workflows, reducing overheads, and implementing scalable cloud architectures to increase margins.",
+            "## 3. Customer Centricity",
+            "Designing seamless service flows and feedback loops to maximize customer lifetime value and brand advocacy."
+        ],
+        "education": [
+            "# Modern Educational Methods & Learning Systems",
+            "Fostering knowledge sharing and skill development for future generations.",
+            "## 1. Adaptive Curriculum",
+            "Building dynamic learning paths that adapt to student progress, strengths, and interest areas for personalized learning.",
+            "## 2. Interactive Mediums",
+            "Utilizing visual diagrams, interactive code notebooks, and group projects to reinforce core concepts.",
+            "## 3. Lifelong Growth",
+            "Encouraging curiosity-driven learning and critical thinking outside standard testing metrics to build lifelong learners."
+        ],
+        "tech": [
+            "# Next-Gen Software Architectures & Tech Stack",
+            "Pioneering next-generation software architectures, developer tools, and user experiences.",
+            "## 1. System Automation",
+            "Streamlining workflows with local daemons, custom hotkey bindings, and background workers.",
+            "## 2. UI Fluidity",
+            "Engineering sub-pixel smooth CSS transitions, hardware acceleration, and responsive layouts for a premium feel.",
+            "## 3. Edge Intelligence",
+            "Deploying fast, zero-latency local models and rule engines directly to client devices for offline capability."
+        ],
+        "machine learning": [
+            "# Introduction to Machine Learning & AI Paradigms",
+            "A structured breakdown of modern artificial intelligence and machine learning paradigms.",
+            "## 1. Supervised Learning",
+            "Training models on labeled datasets for classification and regression tasks. Common algorithms include SVMs, Random Forests, and Linear Regressors.",
+            "## 2. Unsupervised Learning",
+            "Clustering and dimensionality reduction techniques for pattern discovery without labels. Utilizes algorithms like K-Means and PCA.",
+            "## 3. Deep Learning & Neural Networks",
+            "Utilizing multi-layered neural networks for computer vision, natural language processing, and advanced generative models.",
+            "## 4. Reinforcement Learning",
+            "Agent-based learning models optimizing policy actions through reward functions in simulated and real-world environments."
+        ],
+        "ai": [
+            "# Introduction to Machine Learning & AI Paradigms",
+            "A structured breakdown of modern artificial intelligence and machine learning paradigms.",
+            "## 1. Supervised Learning",
+            "Training models on labeled datasets for classification and regression tasks. Common algorithms include SVMs, Random Forests, and Linear Regressors.",
+            "## 2. Unsupervised Learning",
+            "Clustering and dimensionality reduction techniques for pattern discovery without labels. Utilizes algorithms like K-Means and PCA.",
+            "## 3. Deep Learning & Neural Networks",
+            "Utilizing multi-layered neural networks for computer vision, natural language processing, and advanced generative models.",
+            "## 4. Reinforcement Learning",
+            "Agent-based learning models optimizing policy actions through reward functions in simulated and real-world environments."
+        ],
+        "clicky": [
+            "# Clicky AI HUD Agent Architecture & Capabilities",
+            "Detailed guide to Clicky — the offline voice-activated HUD sidecar running on Edge Go v1.8.0.",
+            "## 1. Architecture",
+            "Clicky uses an Electron frontend with a premium glassmorphic HUD panel, communicating via stdin/stdout with a Python daemon sidecar.",
+            "## 2. Core Capabilities",
+            "Native coordinate clicking (PyAutoGUI), shell execution, git repository management, DuckDuckGo search, HTML page rendering, and Word doc compilation.",
+            "## 3. Auto-Training Classifier",
+            "Clicky trains a TF-IDF classifier locally on startup, dynamically updating learned phrases into `learned_intents.json` when commands execute successfully."
+        ],
+        "edge go": [
+            "# Clicky AI HUD Agent Architecture & Capabilities",
+            "Detailed guide to Clicky — the offline voice-activated HUD sidecar running on Edge Go v1.8.0.",
+            "## 1. Architecture",
+            "Clicky uses an Electron frontend with a premium glassmorphic HUD panel, communicating via stdin/stdout with a Python daemon sidecar.",
+            "## 2. Core Capabilities",
+            "Native coordinate clicking (PyAutoGUI), shell execution, git repository management, DuckDuckGo search, HTML page rendering, and Word doc compilation.",
+            "## 3. Auto-Training Classifier",
+            "Clicky trains a TF-IDF classifier locally on startup, dynamically updating learned phrases into `learned_intents.json` when commands execute successfully."
+        ],
+        "notch": [
+            "# Clicky AI HUD Agent Architecture & Capabilities",
+            "Detailed guide to Clicky — the offline voice-activated HUD sidecar running on Edge Go v1.8.0.",
+            "## 1. Architecture",
+            "Clicky uses an Electron frontend with a premium glassmorphic HUD panel, communicating via stdin/stdout with a Python daemon sidecar.",
+            "## 2. Core Capabilities",
+            "Native coordinate clicking (PyAutoGUI), shell execution, git repository management, DuckDuckGo search, HTML page rendering, and Word doc compilation.",
+            "## 3. Auto-Training Classifier",
+            "Clicky trains a TF-IDF classifier locally on startup, dynamically updating learned phrases into `learned_intents.json` when commands execute successfully."
+        ]
+    }
+    
+    # Check for keyword matches
+    for key, bullet_list in templates.items():
+        if key in prompt_lower or key in title.lower():
+            return "\n".join(bullet_list)
+            
+    # Default generic fallback generator
+    return "\n".join([
+        f"# In-depth Analysis: {title}",
+        f"An in-depth exploration of {title} prepared by Clicky, your always-on-top HUD sidecar.",
+        f"## Executive Overview",
+        f"Breaking down the core characteristics, current developments, and practical use cases of {title}.",
+        f"## Strategic Implementation",
+        f"How to apply these insights effectively within your workflow, project structures, or personal systems.",
+        f"## Recommended Next Steps",
+        f"Action items, resources, and follow-up topics to deepen your understanding and execution of {title} projects."
+    ])
 
 class SimpleTFIDF:
     """A pure-Python TF-IDF document similarity search engine."""
@@ -157,6 +309,62 @@ qa_engine = SimpleTFIDF()
 # Initialize Intent Classifier
 intent_engine = SimpleTFIDF()
 
+intents_training_set = {}
+
+def rebuild_intent_engine(intents_dict):
+    """Rebuilds and retrains the simple TF-IDF intent engine with updated training data."""
+    global intent_engine
+    intent_engine = SimpleTFIDF()
+    for intent, utterances in intents_dict.items():
+        combined_text = " ".join(utterances)
+        intent_engine.add_document(doc_id=intent, text=combined_text)
+    intent_engine.train()
+
+def auto_train_intent(intent: str, prompt_text: str):
+    """Dynamically appends a prompt to an intent's training set, retrains the engine, and persists it."""
+    global intents_training_set
+    if not intent or not prompt_text:
+        return
+    clean_prompt = prompt_text.strip()
+    if not clean_prompt or len(clean_prompt) < 4:
+        return
+        
+    # Clean wake word prefixes to keep training examples clean
+    prompt_clean = clean_prompt.lower()
+    for prefix in ["hey clicky", "clicky", "hey click", "hi clicky", "wake up clicky"]:
+        if prompt_clean.startswith(prefix):
+            prompt_clean = prompt_clean[len(prefix):].strip().lstrip(',').strip()
+            break
+            
+    if not prompt_clean or len(prompt_clean) < 4:
+        return
+
+    # Update in-memory training list
+    if intent not in intents_training_set:
+        intents_training_set[intent] = []
+        
+    if prompt_clean not in intents_training_set[intent]:
+        intents_training_set[intent].append(prompt_clean)
+        rebuild_intent_engine(intents_training_set)
+        
+        # Save to disk (learned_intents.json)
+        try:
+            learned_path = pathlib.Path(__file__).parent / "learned_intents.json"
+            learned_data = {}
+            if learned_path.exists():
+                try:
+                    learned_data = json.loads(learned_path.read_text(encoding='utf-8'))
+                except Exception:
+                    pass
+            if intent not in learned_data:
+                learned_data[intent] = []
+            if prompt_clean not in learned_data[intent]:
+                learned_data[intent].append(prompt_clean)
+                learned_path.write_text(json.dumps(learned_data, indent=4), encoding='utf-8')
+                print(json.dumps({"type": "status_log", "message": f"Learned new phrase for intent '{intent}': '{prompt_clean}'"}), flush=True)
+        except Exception as e:
+            print(json.dumps({"type": "status_log", "message": f"Failed to persist learned phrase: {str(e)}"}), flush=True)
+
 # Define repository root
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -217,7 +425,8 @@ def index_local_markdown_docs():
 
 def setup_intent_classifier():
     """Sets up the training dataset for local intent classification."""
-    intents_training = {
+    global intents_training_set
+    intents_training_set = {
         "click": [
             "click at coordinates", "move cursor to coordinates and click",
             "point mouse at coordinate location", "tap screen at pixel position",
@@ -253,7 +462,6 @@ def setup_intent_classifier():
             "how to run clicky", "what are the commands",
             "show me help guidelines", "what can you do", "clicky help menu"
         ],
-        # ── NEW INTENTS ──
         "web_search": [
             "search the web for python tutorials",
             "find online articles about AI agents",
@@ -275,6 +483,16 @@ def setup_intent_classifier():
             "design an html page",
             "make a web page with sections",
             "create a simple website html"
+        ],
+        "create_presentation": [
+            "create a presentation about machine learning",
+            "make a slideshow for my project",
+            "build a presentation deck",
+            "create slides about business trends",
+            "generate a slideshow presentation",
+            "design slides for our meeting",
+            "make an interactive powerpoint slideshow",
+            "create a slide deck with details"
         ],
         "create_document": [
             "create a text document",
@@ -334,11 +552,22 @@ def setup_intent_classifier():
         ]
     }
     
-    for intent, utterances in intents_training.items():
-        combined_text = " ".join(utterances)
-        intent_engine.add_document(doc_id=intent, text=combined_text)
+    # Merge custom user-learned intents from disk
+    try:
+        learned_path = pathlib.Path(__file__).parent / "learned_intents.json"
+        if learned_path.exists():
+            learned_data = json.loads(learned_path.read_text(encoding='utf-8'))
+            for intent, utterances in learned_data.items():
+                if intent in intents_training_set:
+                    for u in utterances:
+                        if u not in intents_training_set[intent]:
+                            intents_training_set[intent].append(u)
+                else:
+                    intents_training_set[intent] = utterances
+    except Exception as e:
+        print(json.dumps({"type": "status_log", "message": f"Could not load learned intents: {str(e)}"}), flush=True)
         
-    intent_engine.train()
+    rebuild_intent_engine(intents_training_set)
 
 # Custom Tools
 def capture_screen() -> str:
@@ -418,7 +647,7 @@ def instagram_operation(action: str, post_content: str = "", username: str = "ed
     elif action == "get_notifications":
         return json.dumps({
             "notifications": [
-                {"user": "pixel_art", "type": "like", "target": "v1.7.0 setup post"},
+                {"user": "pixel_art", "type": "like", "target": "v1.8.0 setup post"},
                 {"user": "varshith", "type": "comment", "text": "Beta is looking super slick!"}
             ]
         })
@@ -684,7 +913,10 @@ HTML_TEMPLATE = '''\
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+  
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  
   :root {{
     --accent: {accent};
     --bg: {bg};
@@ -694,167 +926,257 @@ HTML_TEMPLATE = '''\
     --muted: {muted};
     --gradient: {gradient};
   }}
+  
   body {{
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background: var(--bg);
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: var(--bg);
+    background-image: 
+      radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent) 18%, transparent) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(124, 106, 247, 0.08) 0px, transparent 40%),
+      radial-gradient(at 50% 100%, color-mix(in srgb, var(--accent) 6%, transparent) 0px, transparent 50%);
+    background-attachment: fixed;
     color: var(--text);
     min-height: 100vh;
-    padding: 60px 24px;
-    line-height: 1.5;
-    transition: background 0.3s ease;
+    padding: 80px 24px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
   }}
+  
   .container {{
-    max-width: 960px;
+    max-width: 1040px;
     margin: 0 auto;
+    position: relative;
   }}
+  
+  /* Decorative background blobs to contrast with desktop wallpapers */
+  .bg-glow {{
+    position: absolute;
+    width: 300px;
+    height: 300px;
+    background: var(--accent);
+    filter: blur(120px);
+    opacity: 0.15;
+    border-radius: 50%;
+    z-index: -1;
+    pointer-events: none;
+  }}
+  .glow-top-left {{ top: -100px; left: -100px; }}
+  .glow-bottom-right {{ bottom: -100px; right: -100px; }}
+
   .badge {{
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--border);
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     color: var(--accent);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.08em;
-    padding: 5px 12px;
-    border-radius: 20px;
-    margin-bottom: 24px;
+    letter-spacing: 0.06em;
+    padding: 6px 14px;
+    border-radius: 100px;
+    margin-bottom: 28px;
     text-transform: uppercase;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
   }}
+  
   h1 {{
-    font-size: clamp(32px, 6vw, 54px);
-    font-weight: 800;
-    letter-spacing: -1.5px;
-    margin-bottom: 20px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(36px, 7vw, 64px);
+    font-weight: 700;
+    letter-spacing: -2px;
+    margin-bottom: 24px;
     background: var(--gradient);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
-    line-height: 1.1;
+    line-height: 1.05;
   }}
+  
   h2, h3, h4 {{
+    font-family: 'Space Grotesk', sans-serif;
     color: #fff;
-    margin-top: 24px;
-    margin-bottom: 16px;
+    margin-top: 32px;
+    margin-bottom: 18px;
     font-weight: 700;
     letter-spacing: -0.5px;
   }}
+  
   p {{
     color: var(--muted);
-    font-size: 15px;
-    line-height: 1.6;
-    margin-bottom: 20px;
-  }}
-  p.lead {{
-    font-size: 18px;
-    color: var(--muted);
-    line-height: 1.6;
-    margin-bottom: 40px;
-    max-width: 720px;
-  }}
-  ul, ol {{
+    font-size: 16px;
+    line-height: 1.7;
     margin-bottom: 24px;
+  }}
+  
+  p.lead {{
+    font-size: 20px;
+    color: var(--muted);
+    font-weight: 400;
+    line-height: 1.7;
+    margin-bottom: 48px;
+    max-width: 800px;
+    border-left: 2px solid var(--accent);
     padding-left: 20px;
+  }}
+  
+  ul, ol {{
+    margin-bottom: 32px;
+    padding-left: 24px;
     color: var(--muted);
   }}
+  
   li {{
-    margin-bottom: 8px;
-    font-size: 14px;
+    margin-bottom: 12px;
+    font-size: 15px;
   }}
+  
   table {{
     width: 100%;
     border-collapse: collapse;
-    margin: 24px 0;
-    background: var(--surface);
+    margin: 32px 0;
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(12px);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 16px;
     overflow: hidden;
   }}
+  
   th, td {{
-    padding: 14px 18px;
+    padding: 16px 20px;
     text-align: left;
     border-bottom: 1px solid var(--border);
-    font-size: 14px;
+    font-size: 15px;
   }}
+  
   th {{
-    background: rgba(255,255,255,0.02);
+    background: rgba(255, 255, 255, 0.04);
     color: #fff;
     font-weight: 600;
+    font-family: 'Space Grotesk', sans-serif;
   }}
+  
   a {{
     color: var(--accent);
     text-decoration: none;
-    transition: color 0.2s ease;
+    transition: all 0.2s ease;
   }}
+  
   a:hover {{
     color: #fff;
+    text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 50%, transparent);
   }}
+  
   .grid {{
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 24px;
-    margin-top: 32px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 28px;
+    margin-top: 40px;
   }}
+  
   .card {{
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 30px;
-    transition: transform 0.25s cubic-bezier(0.1, 0.8, 0.3, 1), border-color 0.25s ease;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 24px;
+    padding: 36px;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    overflow: hidden;
   }}
+  
+  .card::before {{
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }}
+  
   .card:hover {{
-    transform: translateY(-4px);
-    border-color: rgba(255,255,255,0.18);
+    transform: translateY(-8px);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    box-shadow: 
+      0 20px 40px rgba(0,0,0,0.25), 
+      0 0 24px color-mix(in srgb, var(--accent) 15%, transparent);
   }}
+  
+  .card:hover::before {{
+    opacity: 1;
+  }}
+  
   .card h2 {{
-    font-size: 19px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 22px;
     font-weight: 700;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
     color: #fff;
-    letter-spacing: -0.3px;
+    letter-spacing: -0.5px;
     margin-top: 0;
+    position: relative;
+    z-index: 1;
   }}
+  
   .card p {{
-    font-size: 14px;
+    font-size: 15px;
     color: var(--muted);
-    line-height: 1.6;
+    line-height: 1.7;
     margin-bottom: 0;
+    position: relative;
+    z-index: 1;
   }}
+  
   .btn, button, input[type="submit"] {{
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    background: var(--accent);
+    gap: 10px;
+    background: var(--gradient);
     color: #fff;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
-    padding: 14px 28px;
-    border-radius: 12px;
-    border: none;
+    padding: 16px 32px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     cursor: pointer;
     text-decoration: none;
-    transition: opacity 0.15s, transform 0.15s;
-    margin-top: 36px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    margin-top: 40px;
+    box-shadow: 
+      0 8px 30px rgba(0, 0, 0, 0.3),
+      0 0 20px color-mix(in srgb, var(--accent) 25%, transparent);
   }}
+  
   .btn:hover, button:hover, input[type="submit"]:hover {{
-    opacity: 0.9;
-    transform: translateY(-1px);
+    transform: translateY(-2px);
+    box-shadow: 
+      0 12px 35px rgba(0, 0, 0, 0.35),
+      0 0 30px color-mix(in srgb, var(--accent) 40%, transparent);
   }}
+  
+  .btn:active, button:active, input[type="submit"]:active {{
+    transform: translateY(0);
+  }}
+  
   footer {{
     text-align: center;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
-    margin-top: 80px;
-    opacity: 0.4;
+    margin-top: 100px;
+    opacity: 0.5;
     border-top: 1px solid var(--border);
-    padding-top: 24px;
+    padding-top: 32px;
   }}
 </style>
 </head>
 <body>
 <div class="container">
+  <div class="bg-glow glow-top-left"></div>
+  <div class="bg-glow glow-bottom-right"></div>
   <div class="badge">⚡ Created by Clicky AI Offline Agent</div>
   {body_content}
   <footer>Generated by Edge Go AI Agent • {timestamp}</footer>
@@ -1000,6 +1322,418 @@ def create_html_page(title: str, body_description: str, filename: str = None, th
     })
 
 
+def create_presentation_page(title: str, topic_description: str, filename: str = None) -> str:
+    """Creates a beautiful interactive HTML slideshow presentation and opens it."""
+    import datetime
+    if not filename:
+        slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+        filename = f"clicky_presentation_{slug}"
+    if not filename.endswith('.html'):
+        filename += '.html'
+
+    palette = select_theme_palette(title, topic_description)
+
+    # Parse description into slides
+    lines = [s.strip().lstrip('#').strip() for s in re.split(r'[•\n\-*]\s*', topic_description) if len(s.strip()) > 3]
+    if not lines:
+        lines = [topic_description]
+
+    slides = []
+    # Slide 1: Title Slide
+    slides.append(f'''
+    <div class="slide active" id="slide-1">
+      <div class="badge">Presentation</div>
+      <h1 class="slide-title">{title}</h1>
+      <p class="slide-subtitle">Created by Clicky AI • {datetime.datetime.now().strftime('%B %d, %Y')}</p>
+    </div>
+    ''')
+
+    # Group lines into bullet points for slide content
+    slide_index = 2
+    bullet_groups = []
+    current_group = []
+    for line in lines:
+        if len(current_group) >= 3 or (current_group and any(p in line.lower() for p in ['slide', 'part', 'chapter', 'section'])):
+            bullet_groups.append(current_group)
+            current_group = [line]
+        else:
+            current_group.append(line)
+    if current_group:
+        bullet_groups.append(current_group)
+
+    # Limit to 5 content slides max
+    for group in bullet_groups[:5]:
+        slide_header = title
+        first_item = group[0]
+        if len(first_item.split()) <= 4 and (':' in first_item or '-' in first_item or first_item.istitle()):
+            slide_header = first_item.replace(':', '').replace('-', '').strip()
+            bullets = group[1:]
+        else:
+            headers = ["Overview & Core Concept", "Key Dimensions", "Deep Dive Details", "Execution Plan", "Strategic Summary"]
+            slide_header = headers[slide_index - 2] if (slide_index - 2) < len(headers) else f"Key Detail {slide_index - 1}"
+            bullets = group
+
+        bullet_html = ""
+        for b in bullets:
+            b_title, b_body = extract_card_title(b)
+            if b_title == "Key Feature" or len(b_title.split()) > 3:
+                bullet_html += f'<li>{b}</li>'
+            else:
+                bullet_html += f'<li><strong>{b_title}:</strong> {b_body}</li>'
+
+        if not bullet_html:
+            bullet_html = f'<li>{group[0]}</li>'
+
+        slides.append(f'''
+        <div class="slide" id="slide-{slide_index}">
+          <div class="badge">Slide {slide_index - 1}</div>
+          <h2 class="slide-heading">{slide_header}</h2>
+          <ul class="slide-bullets">
+            {bullet_html}
+          </ul>
+        </div>
+        ''')
+        slide_index += 1
+
+    # Final Thank You Slide
+    slides.append(f'''
+    <div class="slide" id="slide-{slide_index}">
+      <div class="badge">Conclusion</div>
+      <h1 class="slide-title" style="font-size: clamp(36px, 8vw, 64px);">Thank You!</h1>
+      <p class="slide-subtitle">Questions & Discussion</p>
+    </div>
+    ''')
+
+    slides_content = "\n".join(slides)
+
+    # Presentation Template
+    presentation_html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} — Presentation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+  
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  
+  :root {{
+    --accent: {palette['accent']};
+    --bg: {palette['bg']};
+    --surface: {palette['surface']};
+    --border: {palette['border']};
+    --text: {palette['text']};
+    --muted: {palette['muted']};
+    --gradient: {palette['gradient']};
+  }}
+  
+  body {{
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: var(--bg);
+    background-image: 
+      radial-gradient(at 0% 0%, color-mix(in srgb, var(--accent) 18%, transparent) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(124, 106, 247, 0.08) 0px, transparent 50%);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    padding: 24px;
+    -webkit-font-smoothing: antialiased;
+  }}
+  
+  .presentation-container {{
+    width: 100%;
+    max-width: 960px;
+    height: 560px;
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 32px;
+    padding: 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    box-shadow: 
+      0 30px 60px rgba(0,0,0,0.4), 
+      0 0 50px color-mix(in srgb, var(--accent) 10%, transparent);
+    transition: all 0.3s ease;
+  }}
+
+  /* Background glows */
+  .bg-glow {{
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    background: var(--accent);
+    filter: blur(150px);
+    opacity: 0.12;
+    border-radius: 50%;
+    z-index: -1;
+    pointer-events: none;
+  }}
+  .glow-top {{ top: -150px; left: -150px; }}
+  .glow-bottom {{ bottom: -150px; right: -150px; }}
+
+  .badge {{
+    display: inline-flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 6px 14px;
+    border-radius: 100px;
+    text-transform: uppercase;
+    align-self: flex-start;
+    margin-bottom: 24px;
+  }}
+
+  .slide {{
+    display: none;
+    opacity: 0;
+    transform: scale(0.96) translateY(10px);
+    transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    height: 100%;
+    width: 100%;
+    flex-direction: column;
+    justify-content: center;
+  }}
+
+  .slide.active {{
+    display: flex;
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }}
+
+  .slide-title {{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(32px, 8vw, 56px);
+    font-weight: 700;
+    letter-spacing: -2px;
+    margin-bottom: 16px;
+    background: var(--gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    line-height: 1.1;
+  }}
+
+  .slide-subtitle {{
+    font-size: 18px;
+    color: var(--muted);
+    font-weight: 500;
+  }}
+
+  .slide-heading {{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(24px, 5vw, 36px);
+    color: #fff;
+    margin-bottom: 24px;
+    letter-spacing: -0.5px;
+  }}
+
+  .slide-bullets {{
+    list-style-type: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }}
+
+  .slide-bullets li {{
+    font-size: clamp(16px, 3.5vw, 20px);
+    color: var(--text);
+    position: relative;
+    padding-left: 28px;
+    line-height: 1.5;
+  }}
+
+  .slide-bullets li::before {{
+    content: "✦";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: bold;
+  }}
+
+  /* Controls Overlay */
+  .controls-bar {{
+    position: absolute;
+    bottom: 24px;
+    left: 60px;
+    right: 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }}
+
+  .nav-buttons {{
+    display: flex;
+    gap: 12px;
+  }}
+
+  .nav-btn {{
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #fff;
+    font-size: 18px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+  }}
+
+  .nav-btn:hover {{
+    background: var(--accent);
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }}
+
+  .nav-btn:active {{
+    transform: translateY(0);
+  }}
+
+  .progress-indicator {{
+    font-size: 13px;
+    color: var(--muted);
+    font-weight: 500;
+  }}
+
+  /* Keys Hint */
+  .keys-hint {{
+    position: absolute;
+    bottom: 24px;
+    font-size: 11px;
+    color: var(--muted);
+    opacity: 0.5;
+    transition: opacity 0.2s ease;
+  }}
+  .keys-hint:hover {{ opacity: 1; }}
+
+</style>
+</head>
+<body>
+  <div class="bg-glow glow-top"></div>
+  <div class="bg-glow glow-bottom"></div>
+  
+  <div class="presentation-container">
+    {slides_content}
+    
+    <div class="controls-bar">
+      <span class="progress-indicator" id="progress-text">Slide 1 of {len(slides)}</span>
+      <div class="nav-buttons">
+        <button class="nav-btn" onclick="prevSlide()" aria-label="Previous Slide">‹</button>
+        <button class="nav-btn" onclick="nextSlide()" aria-label="Next Slide">›</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="keys-hint">Use Left/Right arrow keys or Spacebar to navigate</div>
+
+  <script>
+    let currentSlide = 1;
+    const totalSlides = {len(slides)};
+
+    function showSlide(index) {{
+      if (index < 1 || index > totalSlides) return;
+      
+      document.querySelector('.slide.active').classList.remove('active');
+      document.getElementById(`slide-${{index}}`).classList.add('active');
+      
+      currentSlide = index;
+      document.getElementById('progress-text').innerText = `Slide ${{currentSlide}} of ${{totalSlides}}`;
+    }}
+
+    function nextSlide() {{
+      if (currentSlide < totalSlides) {{
+        showSlide(currentSlide + 1);
+      }}
+    }}
+
+    function prevSlide() {{
+      if (currentSlide > 1) {{
+        showSlide(currentSlide - 1);
+      }}
+    }}
+
+    document.addEventListener('keydown', (e) => {{
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {{
+        nextSlide();
+      }} else if (e.key === 'ArrowLeft') {{
+        prevSlide();
+      }}
+    }});
+  </script>
+</body>
+</html>
+'''
+
+    try:
+        DESKTOP_PATH.mkdir(parents=True, exist_ok=True)
+        file_path = DESKTOP_PATH / filename
+    except Exception:
+        file_path = pathlib.Path(tempfile.gettempdir()) / filename
+
+    file_path.write_text(presentation_html, encoding='utf-8')
+    webbrowser.open(file_path.as_uri())
+    return json.dumps({
+        'status': 'success',
+        'file': str(file_path),
+        'title': title,
+        'opened': True
+    })
+
+
+def markdown_to_html(md_text: str) -> str:
+    """Converts a basic subset of Markdown to HTML for styled word document fallbacks."""
+    html = md_text
+    # Headers
+    html = re.sub(r'^#\s+(.+)$', r'<h1>\1</h1>', html, flags=re.M)
+    html = re.sub(r'^##\s+(.+)$', r'<h2>\1</h2>', html, flags=re.M)
+    html = re.sub(r'^###\s+(.+)$', r'<h3>\1</h3>', html, flags=re.M)
+    # Bold
+    html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', html)
+    
+    # Bullet points
+    html = re.sub(r'^\s*[-*•]\s+(.+)$', r'<li>\1</li>', html, flags=re.M)
+    
+    paragraphs = []
+    in_list = False
+    list_items = []
+    
+    for line in html.split('\n'):
+        line_stripped = line.strip()
+        if line_stripped.startswith('<li>') and line_stripped.endswith('</li>'):
+            if not in_list:
+                in_list = True
+            list_items.append(line_stripped)
+        else:
+            if in_list:
+                paragraphs.append("<ul>" + "".join(list_items) + "</ul>")
+                list_items = []
+                in_list = False
+            if line_stripped:
+                if not line_stripped.startswith('<h') and not line_stripped.startswith('<ul') and not line_stripped.startswith('<li'):
+                    paragraphs.append(f"<p>{line_stripped}</p>")
+                else:
+                    paragraphs.append(line_stripped)
+                    
+    if in_list:
+        paragraphs.append("<ul>" + "".join(list_items) + "</ul>")
+        
+    return "\n".join(paragraphs)
+
+
 def create_document(filename: str, content: str, doc_type: str = 'txt') -> str:
     """Creates a document file (txt, md, csv, html) and opens it."""
     try:
@@ -1029,18 +1763,60 @@ def create_document(filename: str, content: str, doc_type: str = 'txt') -> str:
         elif doc_type == 'docx':
             if HAS_WIN32:
                 # Create Word doc via COM
-                word = win32com.client.Dispatch('Word.Application')
-                word.Visible = True
-                doc = word.Documents.Add()
-                doc.Content.Text = content
-                doc.SaveAs2(str(file_path))
+                try:
+                    word = win32com.client.Dispatch('Word.Application')
+                    word.Visible = True
+                    doc = word.Documents.Add()
+                    doc.Content.Text = content
+                    doc.SaveAs2(str(file_path))
+                except Exception:
+                    # Fallback to rich HTML .doc
+                    doc_path = file_path.with_suffix('.doc')
+                    html_wrapper = f"""<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #222; padding: 40px; }}
+  h1 {{ color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 8px; }}
+  h2 {{ color: #2563eb; margin-top: 24px; }}
+  p, li {{ font-size: 14px; }}
+  ul {{ padding-left: 20px; }}
+  li {{ margin-bottom: 8px; }}
+</style>
+</head>
+<body>
+  {markdown_to_html(content)}
+</body>
+</html>"""
+                    doc_path.write_text(html_wrapper, encoding='utf-8')
+                    file_path = doc_path
+                    if IS_WINDOWS:
+                        os.startfile(str(file_path))
             else:
-                # Fallback: write as .txt
-                txt_path = file_path.with_suffix('.txt')
-                txt_path.write_text(content, encoding='utf-8')
-                file_path = txt_path
+                # Fallback: write as formatted rich HTML document with .doc extension
+                doc_path = file_path.with_suffix('.doc')
+                html_wrapper = f"""<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #222; padding: 40px; }}
+  h1 {{ color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 8px; }}
+  h2 {{ color: #2563eb; margin-top: 24px; }}
+  p, li {{ font-size: 14px; }}
+  ul {{ padding-left: 20px; }}
+  li {{ margin-bottom: 8px; }}
+</style>
+</head>
+<body>
+  {markdown_to_html(content)}
+</body>
+</html>"""
+                doc_path.write_text(html_wrapper, encoding='utf-8')
+                file_path = doc_path
                 if IS_WINDOWS:
                     os.startfile(str(file_path))
+                else:
+                    subprocess.Popen(['open', str(file_path)])
 
         elif doc_type == 'xlsx':
             if HAS_WIN32:
@@ -1374,7 +2150,7 @@ def multi_agent_orchestrate(task: str) -> dict:
 
 # Background speech wake word listener thread
 def speech_listener():
-    global wake_word_enabled, wake_word_thread_active
+    global wake_word_enabled, wake_word_thread_active, agent_busy, voice_listener_suspended
     wake_word_thread_active = True
     
     if not HAS_SPEECH:
@@ -1397,16 +2173,64 @@ def speech_listener():
         pass
 
     while True:
-        if not wake_word_enabled:
-            time.sleep(1.0)
+        if not wake_word_enabled or agent_busy or voice_listener_suspended:
+            time.sleep(0.5)
             continue
             
         try:
             with mic as source:
                 audio = r.listen(source, timeout=2.0, phrase_time_limit=2.5)
+            
+            # Recheck status in case it changed while listening
+            if agent_busy or voice_listener_suspended:
+                continue
+                
             text = r.recognize_google(audio).lower()
-            if "hey" in text or "clicky" in text:
+            
+            # Strict matches for "Hey Clicky" phonetics to avoid triggering on standalone common words
+            wake_words = ["clicky", "clickies", "cliky", "cliki", "hey click", "hey clicky", "hi clicky", "wake up clicky"]
+            matched_wake = None
+            for w in wake_words:
+                if w in text:
+                    matched_wake = w
+                    break
+                    
+            if matched_wake:
+                # Find if there is any command content spoken after the wake word in one go
+                parts = text.split(matched_wake, 1)
+                query = parts[1].strip() if len(parts) > 1 else ""
+                
+                # Show the Notch bar / play wake sound
                 print(json.dumps({"type": "wake"}), flush=True)
+                
+                if len(query) > 1:
+                    # Direct query parsed from the initial utterance
+                    print(json.dumps({"type": "status_log", "message": f"Recognized voice query: '{query}'"}), flush=True)
+                    print(json.dumps({"type": "voice_query", "text": query}), flush=True)
+                else:
+                    # Wake word only: immediately listen for the next sentence/command
+                    print(json.dumps({"type": "status_log", "message": "Listening for your command..."}), flush=True)
+                    try:
+                        # Brief sleep to allow chime sound to play and finish
+                        time.sleep(1.2)
+                        if agent_busy or voice_listener_suspended:
+                            continue
+                            
+                        with mic as cmd_source:
+                            audio_cmd = r.listen(cmd_source, timeout=6.0, phrase_time_limit=10.0)
+                        
+                        if agent_busy or voice_listener_suspended:
+                            continue
+                            
+                        cmd_text = r.recognize_google(audio_cmd).strip()
+                        if cmd_text:
+                            print(json.dumps({"type": "voice_query", "text": cmd_text}), flush=True)
+                        else:
+                            print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                    except sr.WaitTimeoutError:
+                        print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                    except Exception:
+                        print(json.dumps({"type": "status_log", "message": "Voice command not recognized."}), flush=True)
         except sr.WaitTimeoutError:
             pass
         except Exception:
@@ -1422,6 +2246,8 @@ async def read_stdin_lines(loop):
         yield line
 
 async def process_prompt(prompt_text):
+    global agent_busy
+    agent_busy = True
     prompt_lower = prompt_text.lower()
     
     # 1. State: Thinking & stream thoughts
@@ -1436,6 +2262,8 @@ async def process_prompt(prompt_text):
     elif "click" in prompt_lower or "coordinate" in prompt_lower or "move mouse" in prompt_lower:
         matched_intent = "click"
     # ── New high-priority rules ──
+    elif any(k in prompt_lower for k in ["create presentation", "make presentation", "build presentation", "create slides", "make slides", "build slides", "slideshow", "powerpoint"]):
+        matched_intent = "create_presentation"
     elif any(k in prompt_lower for k in ["search the web", "search web", "search for", "search online", "find online", "google search", "web search", "look up online"]):
         matched_intent = "web_search"
     elif any(k in prompt_lower for k in ["create html", "make html", "build html", "create webpage", "make webpage", "build webpage", "make a website", "create a website", "html page", "landing page"]):
@@ -1480,6 +2308,9 @@ async def process_prompt(prompt_text):
             matched_intent = "qa_search"
             print(json.dumps({"type": "thought", "text": "Classified as general inquiry. Initiating local QA database search...\n"}), flush=True)
             await asyncio.sleep(0.2)
+
+    if matched_intent and matched_intent != "qa_search":
+        auto_train_intent(matched_intent, prompt_text)
 
     # 2. Orhchestrate Subagents, Tools and Build response
     final_reply = ""
@@ -1748,11 +2579,13 @@ async def process_prompt(prompt_text):
             "   *'search the web for Python tutorials'* — DuckDuckGo results\n\n"
             "4. 📄 **Create HTML Pages**\n"
             "   *'create a landing page for my portfolio'* — generates & opens in browser\n\n"
-            "5. 📝 **Create Documents**\n"
-            "   *'create a Word doc about my project'* / *'make an Excel sheet'*\n\n"
-            "6. ▶️ **Play Videos in Browser**\n"
+            "5. 📊 **Create Slides / Presentations**\n"
+            "   *'create a presentation about machine learning'* — generates interactive slideshow\n\n"
+            "6. 📝 **Create Documents**\n"
+            "   *'create a document: outline.txt'* — generates & opens document\n\n"
+            "7. ▶️ **Play Videos in Browser**\n"
             "   *'play lofi music on YouTube in Brave'* / *'open Netflix in Edge'*\n\n"
-            "7. 🖥️ **Microsoft App Integration**\n"
+            "8. 🖥️ **Microsoft App Integration**\n"
             "   *'open OneNote'* / *'open Word'* / *'launch Excel'*\n\n"
             "8. 🤖 **Multi-Agent Orchestration**\n"
             "   *'orchestrate agents to research and write a report'*\n\n"
@@ -1812,11 +2645,11 @@ async def process_prompt(prompt_text):
             )
         # Also emit structured data for the UI to render as cards
         print(json.dumps({"type": "search_results", "query": query, "results": results_list}), flush=True)
+        auto_train_intent(matched_intent, prompt_text)
 
     elif matched_intent == "create_html":
         # Extract title from prompt
         title = "My Edge Go Page"
-        desc = "A modern web page created by Clicky, your AI agent."
         # Try to extract title after common prefixes
         for prefix in ['create a', 'create an', 'make a', 'build a', 'generate a', 'design a']:
             if prefix in prompt_lower:
@@ -1827,15 +2660,23 @@ async def process_prompt(prompt_text):
         if ':' in prompt_text:
             parts = prompt_text.split(':', 1)
             desc = parts[1].strip()
+        else:
+            desc = expand_topic_content(title, prompt_text)
 
         print(json.dumps({"type": "thought", "text": f"Designing HTML page: '{title}'...\n"}), flush=True)
         await asyncio.sleep(0.2)
 
-        print(json.dumps({"type": "subagent_start", "id": "sub_html_designer",
-                          "description": f"Design HTML: {title}"}), flush=True)
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_html_designer",
+            "description": f"Design HTML: {title}"
+        }), flush=True)
         await asyncio.sleep(0.25)
-        print(json.dumps({"type": "subagent_start", "id": "sub_html_writer",
-                          "description": "Write HTML + CSS structure"}), flush=True)
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_html_writer",
+            "description": "Write HTML + CSS structure"
+        }), flush=True)
         await asyncio.sleep(0.25)
 
         print(json.dumps({"type": "tool_call", "name": "create_html_page",
@@ -1854,6 +2695,63 @@ async def process_prompt(prompt_text):
             f"The page uses Edge Go's premium dark theme with your content."
         )
         print(json.dumps({"type": "file_created", "file": html_data.get('file'), "file_type": "html", "title": title}), flush=True)
+
+    elif matched_intent == "create_presentation":
+        # Extract title from prompt
+        title = "My Clicky Presentation"
+        
+        # Try to extract title after common prefixes
+        for prefix in ['create a presentation about', 'create presentation about', 'make presentation about', 'build presentation about', 'create a presentation on', 'create presentation on', 'make presentation on', 'build presentation on', 'create slides about', 'create slides on', 'make slides about', 'make slides on', 'slideshow about', 'slideshow on', 'slideshow for', 'presentation for']:
+            if prefix in prompt_lower:
+                idx = prompt_lower.index(prefix) + len(prefix)
+                title = prompt_text[idx:].strip().rstrip('.')
+                break
+        else:
+            for prefix in ['create a', 'create an', 'make a', 'build a', 'generate a', 'design a']:
+                if prefix in prompt_lower:
+                    idx = prompt_lower.index(prefix) + len(prefix)
+                    title = prompt_text[idx:].strip().rstrip('.')
+                    title = re.sub(r'\s+(presentation|slideshow|slides|powerpoint).*$', '', title, flags=re.I).strip().title()
+                    break
+
+        if ':' in prompt_text:
+            parts = prompt_text.split(':', 1)
+            desc = parts[1].strip()
+        else:
+            desc = expand_topic_content(title, prompt_text)
+
+        print(json.dumps({"type": "thought", "text": f"Designing interactive slideshow presentation: '{title}'...\n"}), flush=True)
+        await asyncio.sleep(0.2)
+
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_presentation_designer",
+            "description": f"Outline slides for: {title}"
+        }), flush=True)
+        await asyncio.sleep(0.25)
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_presentation_writer",
+            "description": "Compose slide contents and transitions"
+        }), flush=True)
+        await asyncio.sleep(0.25)
+
+        print(json.dumps({"type": "tool_call", "name": "create_presentation_page",
+                          "args": {"title": title, "topic_description": desc}}), flush=True)
+        pres_raw = create_presentation_page(title, desc)
+        await asyncio.sleep(0.4)
+        pres_data = json.loads(pres_raw)
+        print(json.dumps({"type": "tool_done", "result": pres_data.get('file', ''),
+                          "extra": {"file": pres_data.get('file'), "title": title}}), flush=True)
+
+        final_reply = (
+            f"📊 **Interactive Presentation Slides Created & Opened**\n\n"
+            f"**Title:** {title}\n"
+            f"**File:** `{pres_data.get('file', 'Desktop')}` \n"
+            f"**Status:** Opened in your default browser ✅\n\n"
+            f"Use the **Left/Right arrow keys**, **Spacebar**, or the on-screen buttons to navigate through the slides."
+        )
+        print(json.dumps({"type": "file_created", "file": pres_data.get('file'), "file_type": "html", "title": title}), flush=True)
 
     elif matched_intent == "create_document":
         # Determine doc type from prompt
@@ -1953,9 +2851,11 @@ async def process_prompt(prompt_text):
                     report.append(f"   *Source:* {r['url']}\n")
                 content = "\n".join(report)
         else:
-            content = f"Document created by Clicky Agent.\nTask: {prompt_text}\n"
             if ':' in prompt_text:
                 content = prompt_text.split(':', 1)[1].strip()
+            else:
+                title_for_doc = filename.replace('_', ' ').title()
+                content = expand_topic_content(title_for_doc, prompt_text)
 
         print(json.dumps({"type": "thought", "text": f"Writing {doc_type.upper()} document: '{filename}'...\n"}), flush=True)
         await asyncio.sleep(0.2)
@@ -2242,7 +3142,21 @@ async def process_prompt(prompt_text):
         await asyncio.sleep(0.4)
         print(json.dumps({"type": "tool_done", "result": f"Found {len(results)} matches"}), flush=True)
         
-        if results:
+        # Check if we have pre-defined system knowledge templates for this query
+        matched_template = None
+        for key in ["fitness", "portfolio", "cats", "business", "education", "tech", "machine learning", "ai", "clicky", "edge go", "notch"]:
+            if key in prompt_lower:
+                matched_template = key
+                break
+                
+        if matched_template:
+            content = expand_topic_content(matched_template.title(), prompt_text)
+            final_reply = (
+                f"🧠 **Clicky Offline AI Knowledge Base**\n\n"
+                f"Direct match found for *\"{matched_template.title()}\"* in offline system templates:\n\n"
+                f"{content}"
+            )
+        elif results and results[0][0] > 0.08:
             print(json.dumps({"type": "thought", "text": "Synthesizing answer based on relevant indexed sections...\n"}), flush=True)
             await asyncio.sleep(0.2)
             
@@ -2272,6 +3186,7 @@ async def process_prompt(prompt_text):
         
     print(json.dumps({"type": "done", "text": final_reply}), flush=True)
     print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+    agent_busy = False
 
 async def main():
     loop = asyncio.get_running_loop()
@@ -2297,6 +3212,11 @@ async def main():
                 global wake_word_enabled
                 wake_word_enabled = bool(payload.get("enabled", True))
                 print(json.dumps({"type": "status_log", "message": f"Wake word active: {wake_word_enabled}"}), flush=True)
+                continue
+                
+            elif payload.get("type") == "suspend_voice_listener":
+                global voice_listener_suspended
+                voice_listener_suspended = bool(payload.get("suspended", False))
                 continue
                 
             elif payload.get("type") == "prompt":

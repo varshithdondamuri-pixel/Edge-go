@@ -120,6 +120,23 @@ export default function App() {
     })
   }, [])
 
+  // ── Load saved settings from disk (via IPC) on startup ───────────────────
+  useEffect(() => {
+    if (isElectron && window.electronAPI.getSettings) {
+      window.electronAPI.getSettings().then(saved => {
+        if (saved) {
+          const merged = normalizeSettings(saved)
+          setSettings(prev => {
+            if (settingsEqual(prev, merged)) return prev
+            remoteSettingsRef.current = true
+            return merged
+          })
+          saveStoredSettings(merged)
+        }
+      }).catch(err => console.error('[Settings] Failed to fetch settings:', err))
+    }
+  }, [])
+
   // ── Persist + broadcast whenever settings change ─────────────────────────
   const prevSettingsRef = useRef(null)
   useEffect(() => {
@@ -457,6 +474,7 @@ export default function App() {
         onPlayPause={handlePlayPause}
         onNext={handleNext}
         onPrev={handlePrev}
+        onSeek={handleSeek}
       />
     </>
   )

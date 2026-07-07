@@ -316,12 +316,13 @@ function AudioVizMini({ isPlaying }) {
 }
 
 function BatteryMini({ battery }) {
-  const { level = 100, charging = false, available = false } = battery || {}
+  const { level = 100, charging = false, available = false, acConnected = false } = battery || {}
   if (!available) return null
   const colorClass = level > 60 ? 'high' : level > 20 ? 'mid' : 'low'
+  const isPluggedIn = charging || acConnected
   return (
-    <div className="battery-mini" title={`${level}%${charging ? ' · Charging' : ''}`}>
-      {charging && <span className="bolt">⚡</span>}
+    <div className="battery-mini" title={`${level}%${charging ? ' · Charging' : acConnected ? ' · Plugged In' : ''}`}>
+      {isPluggedIn && <span className="bolt">⚡</span>}
       <div className="bm-icon">
         <div
           className={`bm-fill ${colorClass}`}

@@ -2,6 +2,39 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.9.0] - 2026-07-07
+
+### Added
+- **Standard MusicPlayer in Control Center**: Replaced custom music quick-controls in the Control Center with the full-featured, responsive `MusicPlayer` component, adding interactive progress tracking and seek support.
+
+### Fixed
+- **Music Widget Syncing**: Fixed music banner not syncing or displaying in the Control Center when Beta Mode is disabled.
+- **Clean Control Center Layout**: Hides the AI Agent panel when Beta Mode is turned off, preventing a non-functional, offline input box from cluttering the Control Center on clean installations.
+
+## [1.8.1] - 2026-07-05
+
+### Fixed
+- **Windows launch visibility**: New installs now open as a visible, clickable top-center notch and show in the Windows taskbar by default.
+- **Reliable restore behavior**: Tray, hotkey, agent wake, and second-instance launches now use the same restore path so the notch reappears with correct bounds, focusability, and always-on-top behavior.
+
+## [1.8.0] - 2026-06-30
+
+### Added
+- **AI Agent Settings Tab**: Integrated options into the Settings panel for enabling/disabling Agent mode, selecting voice profiles (Default, Male, Female, British, Robot Synth), choosing microphone source, configuring agent folder, toggling agent permissions/integrations, and visibility preferences.
+- **Voice Synthesis (TTS)**: Added audio speech response generation using the browser's Web Audio & SpeechSynthesis API when the AI agent completes tasks.
+- **Robust Wake-Word Matcher**: Expanded regex/phonetic matches in `speech_listener` for "Hey Clicky" (supporting variants like clicky, clickies, click, clique, cliky, cliki, hey click, wake).
+- **Progress Track Keyboard Accessibility**: Enabled Arrow keys (`ArrowLeft`/`ArrowRight`) to seek backward/forward by 5 seconds on the media player progress bar.
+- **Volume Mute/Unmute Shortcut**: Click on the speaker icon in the music player to instantly mute or unmute the system, remembering the last non-zero volume.
+- **Active Voice Command Processing**: Upgraded the agent voice-wake system. If the user says a command immediately after the wake word (one-shot, e.g., "Hey Clicky, show git status"), the agent automatically transcribes and processes it. If only the wake word is heard, the agent enters a 4-second command-listening mode, populates the UI input box visually with the transcribed query, and auto-submits it.
+- **Premium Glassmorphic HTML Pages**: Upgraded the HTML generator template with ultra-premium styling. Websites now load modern Google Fonts (`Plus Jakarta Sans` and `Space Grotesk`), use glassmorphic cards with responsive layout grids, float micro-animations, glowing borders, custom shadows, and mesh background gradients. This ensures high visual contrast against any system wallpaper.
+
+### Fixed
+- **Robust Python Spawning**: Implemented fallback search of python executables (`python`, `python3`, `py` on Windows; `python3`, `python` on macOS/Linux) and multi-path loading fallback for local `.env` files (renderer root, executable directory, or userData folder).
+- **Graceful Connection States**: Implemented instant connecting/offline state broadcasting to ensure accurate UI synchronization of the AI Agent connection indicator.
+- **AC Connection & Time Remaining**: Extended battery monitoring to support `acConnected` plugged-in status (without charging) and display the `timeRemaining` metric on Windows.
+- **Cleaned Up Pro Upgrade Banner**: Removed the placeholder Pro Upgrade banner in the Settings About tab.
+- **Upgraded Music Control Icons**: Redesigned Play, Pause, Prev, and Next SVG icons with rounded corners, proper paths, and a cleaner aesthetic.
+
 ## [1.7.0] - 2026-06-16
 
 ### Fixed

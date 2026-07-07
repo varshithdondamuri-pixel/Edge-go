@@ -555,9 +555,25 @@ html,body,#root{
 
 /* Volume mini */
 .vol-mini{display:flex;align-items:center;gap:5px;}
+.vol-icon-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  outline: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 200ms cubic-bezier(0.34,1.56,0.64,1);
+}
+.vol-icon-btn:hover {
+  transform: scale(1.2);
+}
+.vol-icon-btn:active {
+  transform: scale(0.9);
+}
 .vol-icon{
   font-size:12px;color:var(--color-text-muted);
-  transition: transform 200ms cubic-bezier(0.34,1.56,0.64,1);
 }
 .vol-slider{
   -webkit-appearance:none;appearance:none;width:60px;height:3px;
@@ -3841,4 +3857,75 @@ html,body,#root{
   white-space: pre-wrap;
 }
 
+/* ── Control Center Beta Card & Connection States ── */
+.cc-beta-card {
+  background: rgba(124, 106, 247, 0.05);
+  border: 1px solid rgba(124, 106, 247, 0.18);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all var(--transition-normal);
+}
 
+.cc-beta-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cc-beta-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-beta-card-icon {
+  font-size: 14px;
+}
+
+.cc-beta-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.cc-beta-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-beta-card-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transition: background-color 0.3s ease;
+}
+
+.cc-beta-card-dot.active {
+  background-color: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+
+.cc-beta-card-dot.inactive {
+  background-color: #94a3b8;
+}
+
+.cc-beta-card-text {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+
+/* Agent Connection Dots */
+.cc-agent-dot.connecting {
+  background-color: #eab308;
+  animation: agentPulse 1s infinite alternate;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.6);
+}
+
+.cc-agent-dot.offline {
+  background-color: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}

@@ -15,6 +15,7 @@ const NAV = [
   { id: 'huds',        icon: '🪟',  label: 'HUDs' },
   { id: 'battery',     icon: '🔋',  label: 'Battery' },
   { id: 'connectors',  icon: '🔗',  label: 'Connectors' },
+  { id: 'agent',       icon: '🤖',  label: 'AI Agent' },
   { id: 'shortcuts',   icon: '⌨️',  label: 'Shortcuts' },
   { id: 'advanced',    icon: '🧪',  label: 'Advanced' },
   { id: 'about',       icon: 'ℹ️',  label: 'About' },
@@ -350,6 +351,133 @@ function ConnectorsTab({ s, set }) {
   )
 }
 
+function AgentTab({ s, set }) {
+  // Warm up voices cache on mount
+  useEffect(() => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.getVoices()
+      const handleVoices = () => {
+        window.speechSynthesis.getVoices()
+      }
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoices)
+      return () => {
+        window.speechSynthesis?.removeEventListener?.('voiceschanged', handleVoices)
+      }
+    }
+  }, [])
+
+  const speakPreview = (profile) => {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+
+    let previewText = `This is a preview of the default voice.`
+    if (profile === 'Male') previewText = `This is a preview of the male voice.`
+    if (profile === 'Female') previewText = `This is a preview of the female voice.`
+    if (profile === 'British') previewText = `This is a preview of the British voice.`
+    if (profile === 'Robot') previewText = `This is a preview of the robot voice.`
+
+    const utterance = new SpeechSynthesisUtterance(previewText)
+    utterance.volume = 1.0
+    
+    const voices = window.speechSynthesis.getVoices()
+    let selectedVoice = null
+    if (profile === 'Male') {
+      selectedVoice = voices.find(v => v.name?.toLowerCase().includes('male') || v.name?.toLowerCase().includes('david') || v.name?.toLowerCase().includes('google us english male'))
+    } else if (profile === 'Female') {
+      selectedVoice = voices.find(v => v.name?.toLowerCase().includes('female') || v.name?.toLowerCase().includes('zira') || v.name?.toLowerCase().includes('google us english female') || v.name?.toLowerCase().includes('samantha'))
+    } else if (profile === 'British') {
+      selectedVoice = voices.find(v => v.name?.toLowerCase().includes('uk') || v.name?.toLowerCase().includes('british') || v.name?.toLowerCase().includes('hazel') || v.name?.toLowerCase().includes('google uk english'))
+    }
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+    
+    if (profile === 'Robot') {
+      utterance.pitch = 0.5
+      utterance.rate = 0.85
+    } else {
+      utterance.pitch = 1.0
+      utterance.rate = 1.0
+    }
+
+    utterance.onstart = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(true)
+    }
+    utterance.onend = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(false)
+    }
+    utterance.onerror = () => {
+      window.electronAPI?.setVoiceListenerSuspended?.(false)
+    }
+    
+    window.speechSynthesis.speak(utterance)
+  }
+
+  return (
+    <>
+      <Section title="AI Agent Mode">
+        <Row label="Enable Agent Mode" hint="Turn on the offline AI Agent prompt, pipeline, and settings">
+          <Toggle id="tog-agent-mode" value={s.betaModeEnabled} onChange={v => {
+            set('betaModeEnabled', v)
+            if (v) set('soundEnabled', true)
+          }} />
+        </Row>
+      </Section>
+      
+      {s.betaModeEnabled && (
+        <>
+          <Section title="Voice & Audio">
+            <Row label="Sound Effects" hint="Play voice and chime audio responses">
+              <Toggle id="tog-agent-sound" value={s.soundEnabled} onChange={v => set('soundEnabled', v)} />
+            </Row>
+            <Row label="Voice Profile" hint="Select preferred synthesized voice accent/gender">
+              <Select id="sel-agent-voice" value={s.voiceProfile || 'Default'} onChange={v => {
+                set('voiceProfile', v)
+                speakPreview(v)
+              }} options={[
+                { value: 'Default', label: 'Default System' },
+                { value: 'Male', label: 'David (Male)' },
+                { value: 'Female', label: 'Zira / Samantha (Female)' },
+                { value: 'British', label: 'Hazel / British (UK)' },
+                { value: 'Robot', label: 'Robot Synth' },
+              ]} />
+            </Row>
+            <Row label="Microphone Source">
+              <Select id="sel-agent-mic" value={s.microphoneSource || 'System Default'} onChange={v => set('microphoneSource', v)} options={[
+                { value: 'System Default', label: 'System Default Microphone' },
+              ]} />
+            </Row>
+          </Section>
+
+          <Section title="Permissions & System">
+            <Row label="Agent Permissions" hint="Allow agent to run local git and terminal commands">
+              <Toggle id="tog-agent-perm" value={s.agentPermissionsEnabled} onChange={v => set('agentPermissionsEnabled', v)} />
+            </Row>
+            <Row label="Integrations" hint="Allow agent to interact with other system connectors">
+              <Toggle id="tog-agent-integ" value={s.agentIntegrationsEnabled} onChange={v => set('agentIntegrationsEnabled', v)} />
+            </Row>
+            <Row label="Show in Dock" hint="Display notch in taskbar icon tray">
+              <Toggle id="tog-agent-dock" value={s.showInDock} onChange={v => {
+                set('showInDock', v)
+                window.electronAPI?.setShowInTaskbar?.(v)
+              }} />
+            </Row>
+            <Row label="Show in Screen Recordings" hint="Allow screen capture tools to record the Notch">
+              <Toggle id="tog-agent-rec" value={s.showInScreenRecordings} onChange={v => set('showInScreenRecordings', v)} />
+            </Row>
+            <Row label="Agent Folder">
+              <Select id="sel-agent-folder" value={s.agentFolder || 'Default'} onChange={v => set('agentFolder', v)} options={[
+                { value: 'Default', label: 'Default Storage' },
+              ]} />
+            </Row>
+          </Section>
+        </>
+      )}
+    </>
+  )
+}
+
 function ShortcutsTab() {
   const [shortcuts, setShortcuts] = useState({
     openSettings:  ['Win', 'Alt', 'S'],
@@ -483,16 +611,7 @@ function AboutTab({ s, set }) {
           <span>🐛</span> Report Bug
         </a>
       </div>
-      <div className="about-upgrade">
-        <div className="upgrade-badge">✦ Pro</div>
-        <div className="upgrade-text">
-          <strong>Unlock Pro Features</strong>
-          <span>Custom themes, more widgets, priority support</span>
-        </div>
-        <button type="button" id="btn-upgrade" className="upgrade-btn" onClick={() => alert('Pro version coming soon!')}>
-          Upgrade →
-        </button>
-      </div>
+
       <div className="about-footer">Made with ♥ by not so boring people</div>
     </>
   )
@@ -575,6 +694,7 @@ export default function SettingsPanel({ open, onClose, initialTab, isStandalone,
     huds:       <HUDsTab s={settings} set={set} />,
     battery:    <BatteryTab s={settings} set={set} />,
     connectors: <ConnectorsTab s={settings} set={set} />,
+    agent:      <AgentTab s={settings} set={set} />,
     shortcuts:  <ShortcutsTab />,
     advanced:   <AdvancedTab s={settings} set={set} onReset={resetAll} />,
     about:      <AboutTab s={settings} set={set} />,
