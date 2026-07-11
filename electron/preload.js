@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
   // Data fetchers
   getBattery: () => ipcRenderer.invoke('get-battery'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),

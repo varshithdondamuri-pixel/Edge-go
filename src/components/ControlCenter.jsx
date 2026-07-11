@@ -298,7 +298,7 @@ export default function ControlCenter({
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'fixed',
-          top: window.electronAPI ? '8px' : '38px',
+          top: (window.electronAPI && window.electronAPI.platform === 'darwin') ? '38px' : (window.electronAPI ? '8px' : '38px'),
           right: '16px',
           display: 'flex',
           flexDirection: 'column',

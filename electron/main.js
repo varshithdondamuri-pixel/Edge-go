@@ -238,7 +238,8 @@ function applyNotchBounds(animate = true) {
       const x = Math.max(0, sw - panelWidth - 16)
       mainWindow.setBounds({ width: panelWidth, height: panelHeight, x, y: notchY }, false)
     } else {
-      mainWindow.setBounds({ width: sw, height: sh, x: 0, y: notchY }, false)
+      const displayHeight = process.platform === 'darwin' ? display.bounds.height : sh
+      mainWindow.setBounds({ width: sw, height: displayHeight, x: 0, y: notchY }, false)
     }
     mainWindow.setIgnoreMouseEvents(false)
     // Make window focusable so sliders/inputs work inside the Control Center
@@ -876,12 +877,103 @@ ipcMain.handle('connect-wifi-network', async (_, ssid) => connectWindowsWifiNetw
 
 ipcMain.handle('set-system-control', async (_, control, value) => setSystemControl(control, value))
 
+// ─── macOS Media Getters ───────────────────────────────────────────────────
+
+function parseAppleScriptOutput(output) {
+  const parts = output.split('|||')
+  if (parts.length === 8) {
+    return {
+      title: parts[0] || 'Unknown Title',
+      artist: parts[1] || '',
+      album: parts[2] || '',
+      duration: parseFloat(parts[3]) || 0,
+      position: parseFloat(parts[4]) || 0,
+      isPlaying: parts[5].toLowerCase().includes('playing'),
+      volume: parseInt(parts[6]) || 50,
+      source: parts[7] || 'Media',
+      sourceAppId: parts[7] || '',
+      isCurrent: parts[5].toLowerCase().includes('playing'),
+      playbackStatus: parts[5] || '',
+      albumArt: null,
+    }
+  }
+  return null
+}
+
+function getMacSpotifyInfo() {
+  return new Promise((resolve) => {
+    const script = `
+      tell application "Spotify"
+        try
+          set t_state to player state as string
+          set t_name to name of current track
+          set t_artist to artist of current track
+          set t_album to album of current track
+          set t_duration to (duration of current track) / 1000
+          set t_position to player position
+          set t_volume to sound volume
+          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
+        on error
+          return ""
+        end try
+      end tell
+    `
+    exec(`osascript -e '${script}'`, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        resolve(null)
+      } else {
+        resolve(parseAppleScriptOutput(stdout.trim()))
+      }
+    })
+  })
+}
+
+function getMacMusicInfo() {
+  return new Promise((resolve) => {
+    const script = `
+      tell application "Music"
+        try
+          set t_state to player state as string
+          set t_name to name of current track
+          set t_artist to artist of current track
+          set t_album to album of current track
+          set t_duration to duration of current track
+          set t_position to player position
+          set t_volume to sound volume
+          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
+        on error
+          return ""
+        end try
+      end tell
+    `
+    exec(`osascript -e '${script}'`, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        resolve(null)
+      } else {
+        resolve(parseAppleScriptOutput(stdout.trim()))
+      }
+    })
+  })
+}
+
 // ─── IPC: Media Info (cross-platform) ──────────────────────────────────────
 
 // Shared store — whichever platform daemon fills this, the renderer reads it.
 let lastMediaData = []
 
 ipcMain.handle('get-media-info', async () => {
+  if (process.platform === 'darwin') {
+    try {
+      const results = await Promise.all([
+        getMacSpotifyInfo(),
+        getMacMusicInfo()
+      ])
+      return results.filter(Boolean)
+    } catch (e) {
+      console.error('macOS get-media-info error:', e.message)
+      return []
+    }
+  }
   return lastMediaData
 })
 
@@ -1615,6 +1707,28 @@ async function getWindowsVolume() {
 ipcMain.handle('get-system-volume', async () => getWindowsVolume())
 
 ipcMain.on('media-command', (_, command, value, source) => {
+  if (process.platform === 'darwin') {
+    let script = ''
+    let target = (source || '').toLowerCase().includes('spotify') ? 'Spotify' : 'Music'
+    if (command === 'playpause') {
+      script = `tell application "${target}" to playpause`
+    } else if (command === 'next') {
+      script = `tell application "${target}" to next track`
+    } else if (command === 'prev') {
+      script = `tell application "${target}" to previous track`
+    } else if (command === 'seek') {
+      script = `tell application "${target}" to set player position to ${value}`
+    } else if (command === 'volume') {
+      script = `tell application "${target}" to set sound volume to ${value}`
+    }
+    if (script) {
+      exec(`osascript -e '${script}'`, (err) => {
+        if (err) console.error(`macOS media-command ${command} error:`, err.message)
+      })
+    }
+    return
+  }
+
   if (command === 'volume') {
     setWindowsVolume(value)
     return

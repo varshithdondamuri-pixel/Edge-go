@@ -221,7 +221,7 @@ export default function AgentPanel({ settings = {} }) {
           playWakeSound()
           setIsListening(true)
           setLogs(p => [...p, "🎙️ Wake Word 'Hey Clicky' triggered!"])
-          setTimeout(() => setIsListening(false), 5000)
+          setTimeout(() => setIsListening(false), 15000)
           break
         case 'thought':
           setStatus('thinking')

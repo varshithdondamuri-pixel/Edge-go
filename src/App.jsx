@@ -95,6 +95,15 @@ export default function App() {
   const remoteSettingsRef = useRef(false)
 
   useEffect(() => {
+    const isMac = isElectron
+      ? window.electronAPI.platform === 'darwin'
+      : /Mac/i.test(window.navigator.platform || '')
+    if (isMac) {
+      document.documentElement.classList.add('platform-darwin')
+    }
+  }, [])
+
+  useEffect(() => {
     const handleHashChange = () => setRoute(window.location.hash)
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)

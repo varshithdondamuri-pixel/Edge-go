@@ -2217,7 +2217,7 @@ def speech_listener():
                             continue
                             
                         with mic as cmd_source:
-                            audio_cmd = r.listen(cmd_source, timeout=6.0, phrase_time_limit=10.0)
+                            audio_cmd = r.listen(cmd_source, timeout=15.0, phrase_time_limit=20.0)
                         
                         if agent_busy or voice_listener_suspended:
                             continue
@@ -2227,10 +2227,13 @@ def speech_listener():
                             print(json.dumps({"type": "voice_query", "text": cmd_text}), flush=True)
                         else:
                             print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                            print(json.dumps({"type": "status", "state": "idle"}), flush=True)
                     except sr.WaitTimeoutError:
                         print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                        print(json.dumps({"type": "status", "state": "idle"}), flush=True)
                     except Exception:
                         print(json.dumps({"type": "status_log", "message": "Voice command not recognized."}), flush=True)
+                        print(json.dumps({"type": "status", "state": "idle"}), flush=True)
         except sr.WaitTimeoutError:
             pass
         except Exception:
