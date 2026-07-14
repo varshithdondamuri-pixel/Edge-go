@@ -156,7 +156,7 @@ function getCpuUsage() {
 function runPowerShell(script) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return new Promise((resolve, reject) => {
-    exec(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+    exec(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`, {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 10000,
       windowsHide: true,
@@ -1689,8 +1689,10 @@ function setWindowsVolume(level) {
   const scalar = nextLevel / 100
   broadcastVolume(nextLevel)
   const sent = sendDaemonCommand(`VOLUME:${scalar}`)
-  if (!sent) startWindowsMediaDaemon()
-  scheduleWindowsVolumeFallback(nextLevel, sent ? 160 : 0)
+  if (!sent) {
+    startWindowsMediaDaemon()
+    scheduleWindowsVolumeFallback(nextLevel, 0)
+  }
   return Promise.resolve()
 }
 
