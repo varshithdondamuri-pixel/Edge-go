@@ -2,6 +2,19 @@
 
 All notable changes to Edge Go are documented here.
 
+## [1.10.0] - 2026-07-14
+
+### Added
+- **macOS Media Integration**: Restored macOS media integration via AppleScript/osascript, enabling support for Spotify and Apple Music playback controls, volume tracking, and current song detail extraction.
+- **Microphone Permissions Error Feedback**: Added interactive UI warning alerts when microphone initialization fails, guiding users on how to enable system microphone access.
+
+### Fixed
+- **Control Center macOS Menu Bar Overlap**: Shifted the top vertical alignment of the Control Center panel down to `38px` on macOS to prevent overlap with the native system menu bar.
+- **PowerShell Execution Policy Bypass**: Explicitly bypasses execution policies in `runPowerShell` scripts on Windows to prevent runtime authorization blocks.
+- **Control Center Blur Focus Lock**: Implemented debounced delay (150ms) on closing Control Center and Clipboard panel during window blur events, preventing immediate dismissal when clicking interactive elements.
+- **Optimized Windows Volume Adjustment**: Removed unnecessary delayed fallback loops on successful Windows WASAPI volume commands to eliminate IPC lag.
+- **Voice Agent Command Listening**: Increased the wake-word listener command-capturing timeout to 15 seconds and max phrase limit to 20 seconds, allowing for longer, more descriptive commands.
+
 ## [1.9.0] - 2026-07-07
 
 ### Added
