@@ -2162,6 +2162,7 @@ def speech_listener():
         mic = sr.Microphone()
     except Exception as e:
         print(json.dumps({"type": "status_log", "message": f"Microphone init skipped: {str(e)}"}), flush=True)
+        print(json.dumps({"type": "error", "message": "Voice Wake Word Engine: Microphone failed to initialize. Please check permissions in Windows Settings (Settings > Privacy & security > Microphone) and ensure your recording device is connected."}), flush=True)
         return
 
     print(json.dumps({"type": "status_log", "message": "Voice wake engine active. Listening for 'Hey Clicky'..."}), flush=True)

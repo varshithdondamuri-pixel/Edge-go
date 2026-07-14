@@ -395,13 +395,27 @@ export default function App() {
 
   // ── Close overlays on focus loss (window blur) ──────────────────────────
   useEffect(() => {
+    let timeoutId = null
     const handleBlur = () => {
       if (settings.docked) return
-      setControlCenterOpen(false)
-      setClipboardOpen(false)
+      timeoutId = setTimeout(() => {
+        setControlCenterOpen(false)
+        setClipboardOpen(false)
+      }, 150)
+    }
+    const handleFocus = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
     }
     window.addEventListener('blur', handleBlur)
-    return () => window.removeEventListener('blur', handleBlur)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      window.removeEventListener('blur', handleBlur)
+      window.removeEventListener('focus', handleFocus)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
   }, [settings.docked])
 
   useEffect(() => {

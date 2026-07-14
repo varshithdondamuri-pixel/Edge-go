@@ -142,6 +142,7 @@ export default function AgentPanel({ settings = {} }) {
   const [fileCreated, setFileCreated]   = useState(null)
   const [currentIntent, setCurrentIntent] = useState(null)
   const [showLogs, setShowLogs]         = useState(false)
+  const [micError, setMicError]         = useState(null)
 
   const endThoughtsRef  = useRef(null)
   const endResponseRef  = useRef(null)
@@ -279,6 +280,9 @@ export default function AgentPanel({ settings = {} }) {
         case 'error':
           setStatus('online')
           setLogs(p => [...p, `⚠ Error: ${data.message}`])
+          if (data.message && data.message.includes('Microphone')) {
+            setMicError(data.message)
+          }
           break
         default:
           break
@@ -333,6 +337,7 @@ export default function AgentPanel({ settings = {} }) {
     setWakeEnabled(next)
     window.electronAPI?.setWakeWord?.(next)
     setLogs(p => [...p, `Voice wake: ${next ? 'ON' : 'OFF'}`])
+    if (next) setMicError(null)
   }
 
   const intentMeta = currentIntent ? INTENT_META[currentIntent] : null
@@ -353,6 +358,24 @@ export default function AgentPanel({ settings = {} }) {
 
   return (
     <div className="cc-agent-container">
+      {micError && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.12)',
+          border: '1px solid rgba(239, 68, 68, 0.25)',
+          borderRadius: '12px',
+          padding: '10px 14px',
+          fontSize: '11px',
+          color: '#f87171',
+          margin: '0 0 12px 0',
+          lineHeight: '1.45',
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'flex-start'
+        }}>
+          <span style={{ fontSize: '13px', flexShrink: 0 }}>⚠️</span>
+          <span>{micError}</span>
+        </div>
+      )}
       {/* ── Header ── */}
       <div className="cc-agent-header">
         <div className="cc-agent-status">
