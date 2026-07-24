@@ -571,6 +571,10 @@ function AdvancedTab({ s, set, onReset }) {
 
 function AboutTab({ s, set }) {
   const [appVersion, setAppVersion] = useState('1.6.1')
+  const [checking, setChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [online, setOnline] = useState(true)
 
   useEffect(() => {
     if (window.electronAPI?.getSystemInfo) {
@@ -578,7 +582,35 @@ function AboutTab({ s, set }) {
         if (info?.version) setAppVersion(info.version)
       }).catch(() => {})
     }
+    if (window.electronAPI?.checkInternet) {
+      window.electronAPI.checkInternet().then(status => setOnline(status)).catch(() => {})
+    }
   }, [])
+
+  const handleCheckUpdate = async () => {
+    if (!window.electronAPI?.checkGitUpdate) return
+    setChecking(true)
+    try {
+      const res = await window.electronAPI.checkGitUpdate()
+      setUpdateInfo(res)
+      setOnline(res.online)
+    } catch (e) {
+      setUpdateInfo({ online: false, message: 'Update check failed: ' + e.message })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const handleApplyUpdate = async () => {
+    if (!window.electronAPI?.performGitUpdate) return
+    setUpdating(true)
+    try {
+      await window.electronAPI.performGitUpdate()
+    } catch (e) {
+      setUpdateInfo(prev => ({ ...prev, message: 'Update error: ' + e.message }))
+      setUpdating(false)
+    }
+  }
 
   return (
     <>
@@ -590,18 +622,82 @@ function AboutTab({ s, set }) {
       <div className="about-tagline">
         A sleek, always-on-top floating HUD bar<br />built exclusively for Windows.
       </div>
-      <Section title="Version info">
+      <Section title="Version & Network info">
         <Row label="Release name"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows Edition 🪟</span></Row>
         <Row label="Version"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>{appVersion}</span></Row>
+        <Row label="Internet Connection">
+          <span className="settings-label" style={{ color: online ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+            {online ? '🟢 Connected to Internet' : '🔴 Offline'}
+          </span>
+        </Row>
         <Row label="Platform"><span className="settings-label" style={{ color: 'var(--color-text-secondary)' }}>Windows 10 / 11 (x64)</span></Row>
       </Section>
-      <Section title="Software updates">
+
+      <Section title="Software & Git Auto-Updates">
         <Row label="Automatically check for updates">
           <Toggle id="tog-autoupdate" value={s.autoCheckUpdates} onChange={v => set('autoCheckUpdates', v)} />
         </Row>
         <Row label="Automatically download updates">
           <Toggle id="tog-autodown" value={s.autoDownloadUpdates} onChange={v => set('autoDownloadUpdates', v)} />
         </Row>
+
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--color-text-secondary)' }}>
+              {updateInfo?.message || 'Check for new features from Git remote repository'}
+            </span>
+            <button
+              onClick={handleCheckUpdate}
+              disabled={checking || updating}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '8px',
+                border: '1px solid rgba(255,255,255,0.15)',
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fff',
+                fontSize: '12px',
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              {checking ? 'Checking...' : 'Check for Updates'}
+            </button>
+          </div>
+
+          {updateInfo?.updateAvailable && (
+            <div style={{
+              marginTop: '8px',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              background: 'rgba(59, 130, 246, 0.15)',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justify: 'space-between',
+            }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#60a5fa' }}>Update Ready from Git!</div>
+                <div style={{ fontSize: '11px', color: '#93c5fd' }}>Branch: {updateInfo.branch} ({updateInfo.commitsBehind} new commit(s))</div>
+              </div>
+              <button
+                onClick={handleApplyUpdate}
+                disabled={updating}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: '#3b82f6',
+                  color: '#fff',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {updating ? 'Updating...' : 'Update & Restart'}
+              </button>
+            </div>
+          )}
+        </div>
       </Section>
       <div className="about-links">
         <a id="link-github" href="https://github.com" target="_blank" rel="noreferrer" className="about-link">

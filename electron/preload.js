@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mediaCommand: (cmd, value, source) => ipcRenderer.send('media-command', cmd, value, source),
   readClipboard: () => ipcRenderer.invoke('read-clipboard'),
   writeClipboard: (text) => ipcRenderer.invoke('write-clipboard', text),
+  checkInternet: () => ipcRenderer.invoke('check-internet'),
+  checkGitUpdate: () => ipcRenderer.invoke('check-git-update'),
+  performGitUpdate: () => ipcRenderer.invoke('perform-git-update'),
 
   // Window control
   expandWindow: (expanded, opts) => ipcRenderer.send('expand-window', expanded, opts),

@@ -2261,7 +2261,9 @@ async def process_prompt(prompt_text):
     
     # Rule-based intent overrides for absolute reliability
     matched_intent = None
-    if any(keyword in prompt_lower for keyword in ["git status", "git diff", "git log", "git commit", "git checkout"]):
+    if any(k in prompt_lower for k in ["update app", "git update", "auto update", "check for updates", "update edge go", "pull updates", "update from git"]):
+        matched_intent = "git_update"
+    elif any(keyword in prompt_lower for keyword in ["git status", "git diff", "git log", "git commit", "git checkout"]):
         matched_intent = "git"
     elif "click" in prompt_lower or "coordinate" in prompt_lower or "move mouse" in prompt_lower:
         matched_intent = "click"
@@ -2363,6 +2365,28 @@ async def process_prompt(prompt_text):
             f"2. Routed coordinates to Display Overlay subagent.\n"
             f"3. Executed mouse pointer click at target: **({x}, {y})**.\n\n"
             f"Offline click routine completed successfully."
+        )
+    elif matched_intent == "git_update":
+        print(json.dumps({"type": "thought", "text": "Checking internet connection and fetching Git remote updates...\n"}), flush=True)
+        await asyncio.sleep(0.05)
+        
+        print(json.dumps({
+            "type": "subagent_start",
+            "id": "sub_git_update",
+            "description": "Check Git remote repository status",
+        }), flush=True)
+        await asyncio.sleep(0.05)
+        
+        print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": "git fetch origin && git status -uno"}}), flush=True)
+        cmd_result = run_command("git fetch origin && git status -uno")
+        await asyncio.sleep(0.05)
+        print(json.dumps({"type": "tool_done", "result": cmd_result[:300] + ("..." if len(cmd_result) > 300 else "")}), flush=True)
+        
+        final_reply = (
+            f"🔄 **Git Auto-Update Check**\n\n"
+            f"Polled remote repository (`origin`).\n\n"
+            f"```bash\n{cmd_result}\n```\n\n"
+            f"To pull updates automatically, open **Settings > Software Updates** or ask *'pull updates'*"
         )
         
     elif matched_intent == "git":

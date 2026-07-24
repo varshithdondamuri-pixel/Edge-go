@@ -18,6 +18,7 @@ const {
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
+const dns = require('dns')
 const { exec, spawn } = require('child_process')
 
 const isDev = !app.isPackaged
@@ -586,8 +587,15 @@ ipcMain.handle('get-system-usage', () => {
 
 
 
+let cachedSystemState = null
+let lastSystemStateFetchTime = 0
+
 async function getWindowsSystemState() {
   if (process.platform !== 'win32') return { ...systemControlState }
+  const now = Date.now()
+  if (cachedSystemState && now - lastSystemStateFetchTime < 3000) {
+    return cachedSystemState
+  }
 
   try {
     const out = await runPowerShell(`
@@ -620,18 +628,23 @@ $bluetoothRadio = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }
 } | ConvertTo-Json -Compress
 `)
     const parsed = JSON.parse(out.trim())
-    return {
+    cachedSystemState = {
       ...systemControlState,
       brightness: parsed.brightness ?? systemControlState.brightness,
       dnd: typeof parsed.dnd === 'boolean' ? parsed.dnd : systemControlState.dnd,
       wifi: typeof parsed.wifi === 'boolean' ? parsed.wifi : systemControlState.wifi,
       bluetooth: typeof parsed.bluetooth === 'boolean' ? parsed.bluetooth : systemControlState.bluetooth,
     }
+    lastSystemStateFetchTime = now
+    return cachedSystemState
   } catch (e) {
     console.error('get-system-state error:', e.message)
     return { ...systemControlState }
   }
 }
+
+let cachedWifiNetworks = null
+let lastWifiFetchTime = 0
 
 async function getWindowsWifiNetworks() {
   if (process.platform !== 'win32') {
@@ -640,6 +653,11 @@ async function getWindowsWifiNetworks() {
       { id: 'n2', name: 'CoffeeShop_Free', strength: 2, secured: false, connected: false, saved: false },
       { id: 'n3', name: 'Office_WiFi', strength: 3, secured: true, connected: false, saved: true },
     ]
+  }
+
+  const now = Date.now()
+  if (cachedWifiNetworks && now - lastWifiFetchTime < 10000) {
+    return cachedWifiNetworks
   }
 
   try {
@@ -688,7 +706,7 @@ foreach ($item in $items) {
 `)
     const parsed = out.trim() ? JSON.parse(out.trim()) : []
     const networks = Array.isArray(parsed) ? parsed : [parsed]
-    return networks
+    cachedWifiNetworks = networks
       .filter(network => network && network.name)
       .map((network, idx) => ({
         id: `${network.name}-${idx}`,
@@ -698,6 +716,8 @@ foreach ($item in $items) {
         connected: !!network.connected,
         saved: !!network.saved,
       }))
+    lastWifiFetchTime = now
+    return cachedWifiNetworks
   } catch (e) {
     console.error('get-wifi-networks error:', e.message)
     return []
@@ -1404,7 +1424,7 @@ while ($true) {
   }
 
   $tick++
-  Start-Sleep -Milliseconds 100
+  Start-Sleep -Milliseconds 300
 }
 `
 
@@ -1513,6 +1533,7 @@ function shouldUseSpotifyFallback() {
 function startSpotifyFallbackPoller() {
   if (spotifyFallbackTimer || process.platform !== 'win32') return
   const poll = () => {
+    if (!shouldUseSpotifyFallback()) return
     exec('tasklist /FI "IMAGENAME eq Spotify.exe" /FO CSV /NH /V', { timeout: 4000 }, (err, stdout) => {
       if (err || !stdout) {
         if (spotifyFallbackActive && Date.now() - lastSmtcNonEmptyAt > 5000) {
@@ -1546,7 +1567,7 @@ function startSpotifyFallbackPoller() {
     })
   }
   poll()
-  spotifyFallbackTimer = setInterval(poll, 2000)
+  spotifyFallbackTimer = setInterval(poll, 8000)
 }
 
 // ─── IPC: Media Commands (Windows SMTC) ─────────────────────────────────────
@@ -1891,6 +1912,119 @@ ipcMain.on('take-screenshot', () => {
     exec('start ms-screenclip:')
   }
 })
+
+// ─── Internet & Git Auto-Update System ─────────────────────────────────────
+
+function checkInternetConnection() {
+  return new Promise((resolve) => {
+    dns.lookup('github.com', (err) => {
+      if (!err) return resolve(true)
+      dns.lookup('google.com', (err2) => {
+        resolve(!err2)
+      })
+    })
+  })
+}
+
+function checkGitUpdate() {
+  return new Promise((resolve) => {
+    const cwd = path.join(__dirname, '..')
+    exec('git rev-parse --is-inside-work-tree', { cwd }, (err, stdout) => {
+      if (err || stdout.trim() !== 'true') {
+        return resolve({
+          online: true,
+          updateAvailable: false,
+          currentCommit: 'v' + app.getVersion(),
+          remoteCommit: 'v' + app.getVersion(),
+          branch: 'main',
+          commitsBehind: 0,
+          message: 'Not running inside a git repository.',
+        })
+      }
+
+      exec('git rev-parse --abbrev-ref HEAD', { cwd }, (err, branchOut) => {
+        const branch = (branchOut || 'main').trim()
+        exec('git rev-parse --short HEAD', { cwd }, (err, headOut) => {
+          const currentCommit = (headOut || 'HEAD').trim()
+
+          // Fetch from git remote
+          exec('git fetch origin', { cwd, timeout: 15000 }, (fetchErr) => {
+            if (fetchErr) {
+              return resolve({
+                online: false,
+                updateAvailable: false,
+                currentCommit,
+                remoteCommit: currentCommit,
+                branch,
+                commitsBehind: 0,
+                message: 'Failed to connect to Git remote repository.',
+              })
+            }
+
+            const remoteRef = `origin/${branch}`
+            exec(`git rev-parse --short ${remoteRef}`, { cwd }, (err, remoteOut) => {
+              const remoteCommit = (remoteOut || currentCommit).trim()
+              exec(`git rev-list --count HEAD..${remoteRef}`, { cwd }, (err, countOut) => {
+                const commitsBehind = parseInt((countOut || '0').trim(), 10) || 0
+                const updateAvailable = commitsBehind > 0 || (currentCommit !== remoteCommit && remoteCommit !== 'HEAD')
+
+                resolve({
+                  online: true,
+                  updateAvailable,
+                  currentCommit,
+                  remoteCommit,
+                  branch,
+                  commitsBehind,
+                  message: updateAvailable
+                    ? `Update available! ${commitsBehind} new commit(s) on ${remoteRef}.`
+                    : 'Edge Go is up to date.',
+                })
+              })
+            })
+          })
+        })
+      })
+    })
+  })
+}
+
+function performGitUpdate() {
+  return new Promise((resolve) => {
+    const cwd = path.join(__dirname, '..')
+    exec('git pull --rebase origin main', { cwd, timeout: 45000 }, (err, stdout, stderr) => {
+      const pullOutput = (stdout || '') + (stderr || '')
+      if (err) {
+        exec('git pull', { cwd, timeout: 45000 }, (err2, stdout2) => {
+          if (err2) {
+            return resolve({ ok: false, error: err2.message || 'Git pull failed' })
+          }
+          finishUpdate(stdout2)
+        })
+      } else {
+        finishUpdate(pullOutput)
+      }
+    })
+
+    function finishUpdate(output) {
+      exec('npm run build', { cwd, timeout: 90000 }, () => {
+        BrowserWindow.getAllWindows().forEach((win) => {
+          if (!win.isDestroyed()) {
+            win.webContents.send('agent-msg', {
+              type: 'status_log',
+              message: 'Git Auto-Update completed successfully. Reloading application...',
+            })
+            win.webContents.reloadIgnoringCache()
+          }
+        })
+        resolve({ ok: true, output })
+      })
+    }
+  })
+}
+
+ipcMain.handle('check-internet', async () => checkInternetConnection())
+ipcMain.handle('check-git-update', async () => checkGitUpdate())
+ipcMain.handle('perform-git-update', async () => performGitUpdate())
 
 ipcMain.on('open-devtools', (event) => {
   const owner = BrowserWindow.fromWebContents(event.sender)

@@ -396,12 +396,13 @@ export default function App() {
   // ── Close overlays on focus loss (window blur) ──────────────────────────
   useEffect(() => {
     let timeoutId = null
-    const handleBlur = () => {
-      if (settings.docked) return
+    const handleBlur = (e) => {
+      // Don't auto-dismiss if Control Center is open or docked, to prevent accidental closing on Windows
+      if (settings.docked || controlCenterOpen || clipboardOpen) return
       timeoutId = setTimeout(() => {
         setControlCenterOpen(false)
         setClipboardOpen(false)
-      }, 150)
+      }, 300)
     }
     const handleFocus = () => {
       if (timeoutId) {
@@ -416,7 +417,7 @@ export default function App() {
       window.removeEventListener('focus', handleFocus)
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [settings.docked])
+  }, [settings.docked, controlCenterOpen, clipboardOpen])
 
   useEffect(() => {
     if (!isElectron) return undefined
