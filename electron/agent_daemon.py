@@ -655,8 +655,13 @@ def instagram_operation(action: str, post_content: str = "", username: str = "ed
         return "Unknown Instagram operation."
 
 def run_command(command_line: str) -> str:
-    """Executes a terminal/shell command on the local system."""
+    """Executes a terminal/shell command on the local system with safety checks."""
     try:
+        cmd_lower = command_line.lower().strip()
+        # Block high-risk system destructive operations
+        blocked_keywords = ['rmdir /s', 'format ', 'del /f /s /q c:', 'del /s /q c:', 'drop database', 'rm -rf /', 'diskpart']
+        if any(bad in cmd_lower for bad in blocked_keywords):
+            return "Command blocked: destructive system operation detected."
         res = subprocess.run(command_line, shell=True, capture_output=True, text=True, timeout=10, cwd=REPO_ROOT)
         output = res.stdout.strip()
         if res.stderr:
@@ -1222,6 +1227,7 @@ def create_html_page(title: str, body_description: str, filename: str = None, th
     if not filename:
         slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
         filename = f"clicky_{slug}"
+    filename = pathlib.Path(filename).name
     if not filename.endswith('.html'):
         filename += '.html'
 
@@ -1328,6 +1334,7 @@ def create_presentation_page(title: str, topic_description: str, filename: str =
     if not filename:
         slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
         filename = f"clicky_presentation_{slug}"
+    filename = pathlib.Path(filename).name
     if not filename.endswith('.html'):
         filename += '.html'
 
@@ -1737,6 +1744,8 @@ def markdown_to_html(md_text: str) -> str:
 def create_document(filename: str, content: str, doc_type: str = 'txt') -> str:
     """Creates a document file (txt, md, csv, html) and opens it."""
     try:
+        # Sanitize filename against path traversal
+        filename = pathlib.Path(filename).name
         # Normalise extension
         doc_type = doc_type.lower().lstrip('.')
         if not filename.lower().endswith(f'.{doc_type}'):
