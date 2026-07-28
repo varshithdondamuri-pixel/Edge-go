@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Agent Communication
   sendAgentPrompt: (text) => ipcRenderer.send('send-agent-prompt', text),
+  restartAgentDaemon: () => ipcRenderer.send('restart-agent-daemon'),
   setWakeWord: (enabled) => ipcRenderer.send('set-wake-word', enabled),
   setVoiceListenerSuspended: (suspended) => ipcRenderer.send('set-voice-listener-suspended', suspended),
   onAgentMsg: (cb) => {

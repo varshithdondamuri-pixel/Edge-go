@@ -52,14 +52,16 @@ function playWakeSound() {
 
 /* ── Sub-components ────────────────────────────────────────── */
 
-function SearchResultCard({ results, query }) {
+function SearchResultCard({ results, query, provider }) {
   if (!results?.length) return null
   return (
     <div className="ap-result-card search-card">
       <div className="ap-card-header">
         <span className="ap-card-icon">🌐</span>
         <span className="ap-card-title">Web Search: <em>{query}</em></span>
-        <span className="ap-card-badge">{results.length} results</span>
+        <span className="ap-card-badge" style={{ background: provider?.includes('Bing') ? 'rgba(59,130,246,0.2)' : undefined, color: provider?.includes('Bing') ? '#60a5fa' : undefined }}>
+          {provider || `${results.length} results`}
+        </span>
       </div>
       <div className="ap-search-results">
         {results.map((r) => (
@@ -260,7 +262,7 @@ export default function AgentPanel({ settings = {} }) {
           if (data.result) setLogs(p => [...p, `✓ ${String(data.result).slice(0, 120)}`])
           break
         case 'search_results':
-          setSearchResults({ query: data.query, results: data.results })
+          setSearchResults({ query: data.query, results: data.results, provider: data.provider })
           break
         case 'file_created':
           setFileCreated({ file: data.file, fileType: data.file_type, title: data.title })
@@ -397,7 +399,28 @@ export default function AgentPanel({ settings = {} }) {
             : status === 'connecting'
             ? '⚡ Connecting...'
             : status === 'offline'
-            ? '❌ Offline'
+            ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                ❌ Offline
+                <button
+                  type="button"
+                  onClick={() => window.electronAPI?.restartAgentDaemon?.()}
+                  style={{
+                    background: 'rgba(255,255,255,0.12)',
+                    border: '1px solid rgba(255,255,255,0.22)',
+                    borderRadius: '4px',
+                    color: '#fff',
+                    fontSize: '9px',
+                    padding: '2px 6px',
+                    cursor: 'pointer',
+                    outline: 'none',
+                  }}
+                  title="Click to reconnect agent daemon"
+                >
+                  Reconnect
+                </button>
+              </span>
+            )
             : status === 'running'
             ? `🤖 Orchestrating ${subagents.length} agents...`
             : isThinking
@@ -432,7 +455,7 @@ export default function AgentPanel({ settings = {} }) {
 
       {/* ── Search result cards ── */}
       {searchResults && (
-        <SearchResultCard results={searchResults.results} query={searchResults.query} />
+        <SearchResultCard results={searchResults.results} query={searchResults.query} provider={searchResults.provider} />
       )}
 
       {/* ── File created card ── */}

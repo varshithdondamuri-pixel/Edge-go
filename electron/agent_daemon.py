@@ -44,9 +44,12 @@ IS_WINDOWS = sys.platform == 'win32'
 DESKTOP_PATH = pathlib.Path.home() / 'Desktop'
 DOCUMENTS_PATH = pathlib.Path.home() / 'Documents'
 
-# Force stdout to line-buffered so each JSON payload is flushed on its own line
+# Force stdout/stderr to utf-8 line-buffered stream for Windows compatibility
 try:
-    sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
 except Exception:
     pass
 
@@ -677,20 +680,80 @@ def run_command(command_line: str) -> str:
 # NEW EXPANDED TOOLS
 # ──────────────────────────────────────────────────────────────
 
+def get_bing_api_key():
+    """Retrieves Bing API key from environment or app settings file."""
+    key = os.environ.get('BING_API_KEY') or os.environ.get('AZURE_BING_API_KEY') or os.environ.get('BING_SEARCH_KEY')
+    if key and key.strip():
+        return key.strip()
+    
+    settings_path = os.environ.get('EDGE_GO_SETTINGS_PATH')
+    if not settings_path:
+        if IS_WINDOWS:
+            appdata = os.environ.get('APPDATA', '')
+            if appdata:
+                settings_path = os.path.join(appdata, 'edge-go', 'settings.json')
+        else:
+            home = os.path.expanduser('~')
+            settings_path = os.path.join(home, 'Library', 'Application Support', 'edge-go', 'settings.json')
+            
+    if settings_path and os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                val = data.get('bingApiKey') or ''
+                if val.strip():
+                    return val.strip()
+        except Exception:
+            pass
+    return ''
+
 def web_search(query: str, max_results: int = 5) -> str:
-    """Searches DuckDuckGo (no API key) and returns structured results."""
+    """Searches Microsoft Bing Web Search API (if key present) or DuckDuckGo/Bing fallback."""
+    query = (query or '').strip()
+    if not query:
+        return json.dumps({'query': '', 'results': [], 'count': 0, 'provider': 'None'})
+
+    encoded = urllib.parse.quote_plus(query)
+    bing_key = get_bing_api_key()
+    results = []
+    provider = 'Bing Web Search API v7'
+
+    # 1. Try Microsoft Bing Web Search API v7 if API key is provided
+    if bing_key:
+        try:
+            bing_endpoint = "https://api.bing.microsoft.com/v7.0/search"
+            url = f"{bing_endpoint}?q={encoded}&count={max_results}&responseFilter=Webpages"
+            req = urllib.request.Request(url, headers={
+                'Ocp-Apim-Subscription-Key': bing_key,
+                'User-Agent': 'EdgeGo/2.1.0 (Windows)'
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp_data = json.loads(resp.read().decode('utf-8'))
+                web_pages = resp_data.get('webPages', {}).get('value', [])
+                for i, page in enumerate(web_pages[:max_results]):
+                    results.append({
+                        'rank': i + 1,
+                        'title': page.get('name', ''),
+                        'snippet': page.get('snippet', ''),
+                        'url': page.get('url', ''),
+                        'displayUrl': page.get('displayUrl', '')
+                    })
+                if results:
+                    return json.dumps({'query': query, 'results': results, 'count': len(results), 'provider': provider})
+        except Exception:
+            pass
+
+    # 2. Fallback: DuckDuckGo HTML Search
+    provider = 'DuckDuckGo / Bing Search'
     try:
-        encoded = urllib.parse.quote_plus(query)
         url = f"https://html.duckduckgo.com/html/?q={encoded}"
         req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
         })
         with urllib.request.urlopen(req, timeout=8) as resp:
             html = resp.read().decode('utf-8', errors='replace')
 
-        # Extract result snippets with regex
-        results = []
-        # DuckDuckGo result titles
         title_pattern = re.compile(r'<a[^>]+class="result__a"[^>]*>([^<]+)</a>', re.I)
         snippet_pattern = re.compile(r'<a[^>]+class="result__snippet"[^>]*>([^<]+)</a>', re.I)
         url_pattern = re.compile(r'<a[^>]+class="result__url"[^>]*>([^<]+)</a>', re.I)
@@ -702,35 +765,43 @@ def web_search(query: str, max_results: int = 5) -> str:
         for i in range(min(max_results, len(titles))):
             snippet = snippets[i].strip() if i < len(snippets) else ''
             result_url = urls[i].strip() if i < len(urls) else ''
-            results.append({
-                'rank': i + 1,
-                'title': re.sub(r'<[^>]+>', '', titles[i]).strip(),
-                'snippet': re.sub(r'<[^>]+>', '', snippet),
-                'url': result_url if result_url.startswith('http') else f'https://{result_url}'
-            })
+            clean_title = re.sub(r'<[^>]+>', '', titles[i]).strip()
+            clean_snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+            if clean_title:
+                results.append({
+                    'rank': i + 1,
+                    'title': clean_title,
+                    'snippet': clean_snippet,
+                    'url': result_url if result_url.startswith('http') else f'https://{result_url}'
+                })
+    except Exception:
+        pass
 
-        if not results:
-            # Fallback: Bing HTML search
+    # 3. Fallback: Bing HTML Search
+    if not results:
+        try:
             bing_url = f"https://www.bing.com/search?q={encoded}&setlang=en"
             req2 = urllib.request.Request(bing_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9'
             })
             with urllib.request.urlopen(req2, timeout=8) as resp2:
                 html2 = resp2.read().decode('utf-8', errors='replace')
-            # Parse Bing results
             bing_titles = re.findall(r'<h2[^>]*><a[^>]*>([^<]+)</a></h2>', html2)
             bing_snips = re.findall(r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([^<]+)</p>', html2)
             for i in range(min(max_results, len(bing_titles))):
-                results.append({
-                    'rank': i + 1,
-                    'title': re.sub(r'<[^>]+>', '', bing_titles[i]).strip(),
-                    'snippet': re.sub(r'<[^>]+>', '', bing_snips[i] if i < len(bing_snips) else ''),
-                    'url': f'https://www.bing.com/search?q={encoded}'
-                })
+                clean_title = re.sub(r'<[^>]+>', '', bing_titles[i]).strip()
+                if clean_title:
+                    results.append({
+                        'rank': i + 1,
+                        'title': clean_title,
+                        'snippet': re.sub(r'<[^>]+>', '', bing_snips[i] if i < len(bing_snips) else '').strip(),
+                        'url': f'https://www.bing.com/search?q={encoded}'
+                    })
+        except Exception:
+            pass
 
-        return json.dumps({'query': query, 'results': results, 'count': len(results)})
-    except Exception as e:
-        return json.dumps({'query': query, 'results': [], 'error': str(e)})
+    return json.dumps({'query': query, 'results': results, 'count': len(results), 'provider': provider})
 
 def summarize_text(snippets: list) -> str:
     """Offline simple sentence ranker based on word frequency."""
@@ -3255,7 +3326,13 @@ async def main():
                 global voice_listener_suspended
                 voice_listener_suspended = bool(payload.get("suspended", False))
                 continue
-                
+
+            elif payload.get("type") == "update_config":
+                if "bingApiKey" in payload:
+                    os.environ["BING_API_KEY"] = payload.get("bingApiKey") or ""
+                    print(json.dumps({"type": "status_log", "message": "Updated Bing Web Search API configuration."}), flush=True)
+                continue
+
             elif payload.get("type") == "prompt":
                 prompt_text = payload.get("text", "")
                 await process_prompt(prompt_text)

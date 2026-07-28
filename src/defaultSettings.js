@@ -57,6 +57,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   agentFolder: 'Default',
   agentPermissionsEnabled: true,
   agentIntegrationsEnabled: true,
+  bingApiKey: '',
   voiceProfile: 'Default',
   microphoneSource: 'System Default',
 

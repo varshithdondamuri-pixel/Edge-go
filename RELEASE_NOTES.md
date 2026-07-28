@@ -1,19 +1,20 @@
-# Edge Go / Clicky Windows Beta Release Notes
+# Edge Go v2.1.0 Release Notes
 
-Welcome to the **Edge Go / Clicky Windows Beta** release! This version introduces complete offline operation, local codebase search, and voice activation controls.
+Welcome to **Edge Go v2.1.0**! This major release delivers Microsoft Bing Web Search API v7 integration, Windows `.exe` packaged execution auto-discovery, UTF-8 stream stability guards, and interactive daemon connection management.
 
 ---
 
-## 🚀 Major Items
+## 🚀 Major Highlights in v2.1.0
 
-### 1. Completely Offline Agent Sidecar ("as self")
-- **Zero-Dependency Core**: Fully removed the dependency on `google.antigravity` (Gemini API). Clicky now runs completely locally on your system, avoiding external API network requests and potential server latency.
-- **Local Intent Classification**: Processes user queries locally using a fast vector-space tokenization classifier. It distinguishes intents like mouse actions, shell queries, Notion DB lookups, browser tasks, and general QA search.
-- **System Command Execution**: Integrates real command execution (`subprocess`) and web browser operations (`webbrowser`) directly with your host machine.
+### 1. Microsoft Bing Web Search API v7
+- **Official Bing API v7 Integration**: Direct support for Microsoft Bing Web Search API v7 (`https://api.bing.microsoft.com/v7.0/search`) with `Ocp-Apim-Subscription-Key`.
+- **Dynamic Key Sync**: Configure Bing API Key in the Settings panel; updates automatically sync to the running agent daemon.
+- **Resilient Fallbacks**: Automatic fallback to DuckDuckGo/Bing web search if an API key is omitted or unavailable so web search always works smoothly.
 
-### 2. Multi-Extension Codebase QA Search Index
-- **Recursive File Crawler**: The offline QA search engine now recursively indexes not only Markdown (`.md`) and Text (`.txt`) documents, but also active code files including Python (`.py`), JavaScript (`.js`, `.jsx`), JSON (`.json`), HTML (`.html`), and CSS (`.css`).
-- **Code Line Chunking**: Automatically slices source code files into 15-line chunks to make code snippets and functions fully searchable locally via TF-IDF cosine similarity.
+### 2. `.EXE` Packaged Build Auto-Discovery & Crash Prevention
+- **Windows Python Candidate Resolver**: Scans `%LOCALAPPDATA%`, `C:\Program Files`, and system drives to discover Python executables even if not present in system `PATH`.
+- **UTF-8 Output Guard**: Forces `PYTHONIOENCODING=utf-8` and safe stdout/stderr stream reconfiguration to prevent `UnicodeEncodeError` crashes on Windows when logging Unicode & emojis.
+- **Manual Reconnect Control**: Added an interactive **Reconnect** button in the HUD header to instantly recover daemon status if offline.
 
 ---
 

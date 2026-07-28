@@ -2,6 +2,19 @@
 
 All notable changes to Edge Go are documented here.
 
+## [2.1.0] - 2026-07-29
+
+### Added
+- **Microsoft Bing Web Search API v7**: Integrated direct REST calls to Bing Web Search API v7 (`https://api.bing.microsoft.com/v7.0/search`) with `Ocp-Apim-Subscription-Key` support and fallback to public search.
+- **Bing API Settings Integration**: Added a dedicated Bing Web Search API key input row in Settings panel under AI Agent Mode with instant config sync to running Python daemon.
+- **Agent Daemon Reconnect Control**: Added an interactive **Reconnect** button in AgentPanel status header to instantly recover agent daemon connectivity if offline.
+- **Search Provider Badging**: Display live provider badges (e.g. `Bing Web Search API v7`) on web search cards.
+
+### Fixed
+- **Packaged `.exe` Windows Python Auto-Discovery**: Implemented deep candidate search across `%LOCALAPPDATA%`, `C:\Program Files`, and system drives to discover Python executables even if not in system `PATH`.
+- **UTF-8 Stream Output Guard**: Enforced `PYTHONIOENCODING=utf-8` and stream reconfiguration to prevent `UnicodeEncodeError` crashes on Windows when printing emojis or non-ASCII search results.
+- **Workspace Optimization**: Cleaned up unneeded legacy subdirectories and artifacts.
+
 ## [1.10.0] - 2026-07-14
 
 ### Added

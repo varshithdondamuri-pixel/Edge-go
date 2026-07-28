@@ -82,6 +82,29 @@ function ColorSwatch({ id, value, onChange }) {
   )
 }
 
+function TextInput({ id, value, onChange, placeholder, type = 'text' }) {
+  return (
+    <input
+      id={id}
+      type={type}
+      className="settings-text-input"
+      value={value || ''}
+      placeholder={placeholder}
+      onChange={e => onChange(e.target.value)}
+      style={{
+        background: 'rgba(255,255,255,0.06)',
+        border: '1px solid rgba(255,255,255,0.14)',
+        borderRadius: '8px',
+        padding: '6px 12px',
+        color: '#fff',
+        fontSize: '11px',
+        outline: 'none',
+        width: '210px',
+      }}
+    />
+  )
+}
+
 function Row({ label, hint, children }) {
   return (
     <div className="settings-row">
@@ -470,6 +493,18 @@ function AgentTab({ s, set }) {
               <Select id="sel-agent-folder" value={s.agentFolder || 'Default'} onChange={v => set('agentFolder', v)} options={[
                 { value: 'Default', label: 'Default Storage' },
               ]} />
+            </Row>
+          </Section>
+
+          <Section title="Web Search & Bing API">
+            <Row label="Bing Web Search API Key" hint="Microsoft Bing Web Search API v7 key for high-precision live web search">
+              <TextInput
+                id="input-bing-key"
+                type="password"
+                placeholder="Enter Bing API key..."
+                value={s.bingApiKey || ''}
+                onChange={v => set('bingApiKey', v)}
+              />
             </Row>
           </Section>
         </>

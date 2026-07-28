@@ -1774,9 +1774,19 @@ ipcMain.on('update-settings', (event, settings) => {
   applyWindowEffects(next)
   applyNotchBounds(true)
 
+  if (next.bingApiKey) {
+    process.env.BING_API_KEY = next.bingApiKey
+  }
+
   // Dynamically start/stop the agent daemon on setting changes
   if (next.betaModeEnabled) {
-    startAgentDaemon()
+    if (!agentProcess) {
+      startAgentDaemon()
+    } else if (agentProcess.stdin && !agentProcess.stdin.destroyed) {
+      try {
+        agentProcess.stdin.write(JSON.stringify({ type: 'update_config', bingApiKey: next.bingApiKey || '' }) + '\n')
+      } catch {}
+    }
   } else if (agentProcess) {
     try {
       agentProcess.kill()
@@ -2084,13 +2094,59 @@ function getResolvedPath(filePath) {
   return filePath
 }
 
+function getWindowsPythonCandidates() {
+  const candidates = ['python', 'python3', 'py']
+  if (process.platform !== 'win32') return candidates
+
+  const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : '')
+  const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
+  const systemDrive = process.env.SystemDrive || 'C:'
+
+  const searchDirs = []
+  if (localAppData) {
+    searchDirs.push(path.join(localAppData, 'Programs', 'Python'))
+    searchDirs.push(path.join(localAppData, 'Microsoft', 'WindowsApps'))
+  }
+  if (programFiles) {
+    searchDirs.push(path.join(programFiles, 'Python313'))
+    searchDirs.push(path.join(programFiles, 'Python312'))
+    searchDirs.push(path.join(programFiles, 'Python311'))
+    searchDirs.push(path.join(programFiles, 'Python310'))
+  }
+  searchDirs.push(path.join(systemDrive, '\\Python313'))
+  searchDirs.push(path.join(systemDrive, '\\Python312'))
+  searchDirs.push(path.join(systemDrive, '\\Python311'))
+  searchDirs.push(path.join(systemDrive, '\\Python310'))
+
+  for (const dir of searchDirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        const stat = fs.statSync(dir)
+        if (stat.isDirectory()) {
+          const files = fs.readdirSync(dir)
+          for (const f of files) {
+            if (f.toLowerCase().startsWith('python') && fs.existsSync(path.join(dir, f, 'python.exe'))) {
+              candidates.push(path.join(dir, f, 'python.exe'))
+            }
+          }
+          if (fs.existsSync(path.join(dir, 'python.exe'))) {
+            candidates.push(path.join(dir, 'python.exe'))
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return Array.from(new Set(candidates))
+}
+
 function startAgentDaemon() {
   if (agentProcess) return
 
   const daemonPath = getResolvedPath(path.join(__dirname, 'agent_daemon.py'))
   
-  // Try platform default python cmd, but fall back if it fails
-  const pythonCmds = process.platform === 'win32' ? ['python', 'python3', 'py'] : ['python3', 'python']
+  // Try platform python commands with deep Windows auto-discovery fallback
+  const pythonCmds = getWindowsPythonCandidates()
   let daemonStartedSuccessfully = false
   
   function trySpawn(index) {
@@ -2146,6 +2202,11 @@ function startAgentDaemon() {
     }
 
     envCopy.PYTHONUNBUFFERED = '1'
+    envCopy.PYTHONIOENCODING = 'utf-8'
+    envCopy.EDGE_GO_SETTINGS_PATH = getSettingsPath()
+    if (savedSettings.bingApiKey) {
+      envCopy.BING_API_KEY = savedSettings.bingApiKey
+    }
     
     let spawnedProcess;
     try {
@@ -2160,7 +2221,7 @@ function startAgentDaemon() {
 
     let buffer = ''
     spawnedProcess.stdout.on('data', (data) => {
-      buffer += data.toString()
+      buffer += data.toString('utf-8')
       const lines = buffer.split('\n')
       buffer = lines.pop()
       for (const line of lines) {
@@ -2205,7 +2266,7 @@ function startAgentDaemon() {
     })
 
     spawnedProcess.stderr.on('data', (data) => {
-      const msg = data.toString().trim()
+      const msg = data.toString('utf-8').trim()
       if (msg) console.warn('[Agent daemon stderr]', msg)
     })
 
@@ -2214,7 +2275,6 @@ function startAgentDaemon() {
       if (agentProcess === spawnedProcess) {
         agentProcess = null
       }
-      // If it failed to spawn immediately, try next command
       trySpawn(index + 1)
     })
 
@@ -2244,6 +2304,14 @@ function startAgentDaemon() {
 
   trySpawn(0)
 }
+
+ipcMain.on('restart-agent-daemon', () => {
+  if (agentProcess) {
+    try { agentProcess.kill() } catch {}
+    agentProcess = null
+  }
+  startAgentDaemon()
+})
 
 ipcMain.on('send-agent-prompt', (_, text) => {
   if (agentProcess && agentProcess.stdin && !agentProcess.stdin.destroyed) {
