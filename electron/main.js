@@ -923,20 +923,24 @@ function parseAppleScriptOutput(output) {
 function getMacSpotifyInfo() {
   return new Promise((resolve) => {
     const script = `
-      tell application "Spotify"
-        try
-          set t_state to player state as string
-          set t_name to name of current track
-          set t_artist to artist of current track
-          set t_album to album of current track
-          set t_duration to (duration of current track) / 1000
-          set t_position to player position
-          set t_volume to sound volume
-          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
-        on error
-          return ""
-        end try
-      end tell
+      if application "Spotify" is running then
+        tell application "Spotify"
+          try
+            set t_state to player state as string
+            set t_name to name of current track
+            set t_artist to artist of current track
+            set t_album to album of current track
+            set t_duration to (duration of current track) / 1000
+            set t_position to player position
+            set t_volume to sound volume
+            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Spotify"
+          on error
+            return ""
+          end try
+        end tell
+      else
+        return ""
+      end if
     `
     exec(`osascript -e '${script}'`, (err, stdout) => {
       if (err || !stdout || !stdout.trim()) {
@@ -951,20 +955,24 @@ function getMacSpotifyInfo() {
 function getMacMusicInfo() {
   return new Promise((resolve) => {
     const script = `
-      tell application "Music"
-        try
-          set t_state to player state as string
-          set t_name to name of current track
-          set t_artist to artist of current track
-          set t_album to album of current track
-          set t_duration to duration of current track
-          set t_position to player position
-          set t_volume to sound volume
-          return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
-        on error
-          return ""
-        end try
-      end tell
+      if application "Music" is running then
+        tell application "Music"
+          try
+            set t_state to player state as string
+            set t_name to name of current track
+            set t_artist to artist of current track
+            set t_album to album of current track
+            set t_duration to duration of current track
+            set t_position to player position
+            set t_volume to sound volume
+            return t_name & "|||" & t_artist & "|||" & t_album & "|||" & t_duration & "|||" & t_position & "|||" & t_state & "|||" & t_volume & "|||" & "Apple Music"
+          on error
+            return ""
+          end try
+        end tell
+      else
+        return ""
+      end if
     `
     exec(`osascript -e '${script}'`, (err, stdout) => {
       if (err || !stdout || !stdout.trim()) {
@@ -981,6 +989,61 @@ function getMacMusicInfo() {
 // Shared store — whichever platform daemon fills this, the renderer reads it.
 let lastMediaData = []
 
+const albumArtSearchCache = new Map()
+
+async function fetchAlbumArtFallback(artist, title) {
+  if (!artist || !title) return null
+  const key = `${artist.toLowerCase().trim()} - ${title.toLowerCase().trim()}`
+  if (albumArtSearchCache.has(key)) {
+    return albumArtSearchCache.get(key)
+  }
+  try {
+    const query = encodeURIComponent(`${artist} ${title}`)
+    const https = require('https')
+    return new Promise((resolve) => {
+      https.get(`https://itunes.apple.com/search?term=${query}&entity=song&limit=1`, { timeout: 3000 }, (res) => {
+        let raw = ''
+        res.on('data', chunk => { raw += chunk })
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(raw)
+            if (json.results && json.results.length > 0) {
+              const item = json.results[0]
+              const rawUrl = item.artworkUrl100 || item.artworkUrl60 || null
+              if (rawUrl) {
+                const hiresUrl = rawUrl.replace('100x100bb.jpg', '400x400bb.jpg').replace('60x60bb.jpg', '400x400bb.jpg')
+                albumArtSearchCache.set(key, hiresUrl)
+                return resolve(hiresUrl)
+              }
+            }
+          } catch {}
+          albumArtSearchCache.set(key, null)
+          resolve(null)
+        })
+      }).on('error', () => {
+        albumArtSearchCache.set(key, null)
+        resolve(null)
+      })
+    })
+  } catch {
+    albumArtSearchCache.set(key, null)
+    return null
+  }
+}
+
+async function enrichSessionsWithAlbumArt(sessions) {
+  if (!Array.isArray(sessions)) return sessions
+  const enriched = await Promise.all(sessions.map(async (s) => {
+    if (!s) return s
+    if (!s.albumArt && s.artist && s.title) {
+      const art = await fetchAlbumArtFallback(s.artist, s.title)
+      if (art) return { ...s, albumArt: art }
+    }
+    return s
+  }))
+  return enriched
+}
+
 ipcMain.handle('get-media-info', async () => {
   if (process.platform === 'darwin') {
     try {
@@ -988,20 +1051,22 @@ ipcMain.handle('get-media-info', async () => {
         getMacSpotifyInfo(),
         getMacMusicInfo()
       ])
-      return results.filter(Boolean)
+      const active = results.filter(Boolean)
+      return enrichSessionsWithAlbumArt(active)
     } catch (e) {
       console.error('macOS get-media-info error:', e.message)
       return []
     }
   }
-  return lastMediaData
+  return enrichSessionsWithAlbumArt(lastMediaData)
 })
 
 // Push updates to renderer whenever media changes
-function pushMediaUpdate(data) {
-  lastMediaData = data
+async function pushMediaUpdate(data) {
+  const enriched = await enrichSessionsWithAlbumArt(data)
+  lastMediaData = enriched
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('media-update', data)
+    mainWindow.webContents.send('media-update', enriched)
   }
 }
 
@@ -1732,17 +1797,43 @@ ipcMain.handle('get-system-volume', async () => getWindowsVolume())
 ipcMain.on('media-command', (_, command, value, source) => {
   if (process.platform === 'darwin') {
     let script = ''
-    let target = (source || '').toLowerCase().includes('spotify') ? 'Spotify' : 'Music'
-    if (command === 'playpause') {
-      script = `tell application "${target}" to playpause`
-    } else if (command === 'next') {
-      script = `tell application "${target}" to next track`
-    } else if (command === 'prev') {
-      script = `tell application "${target}" to previous track`
-    } else if (command === 'seek') {
-      script = `tell application "${target}" to set player position to ${value}`
-    } else if (command === 'volume') {
-      script = `tell application "${target}" to set sound volume to ${value}`
+    const sLower = (source || '').toLowerCase()
+    if (sLower.includes('spotify')) {
+      script = `tell application "Spotify" to ${command === 'playpause' ? 'playpause' : command === 'next' ? 'next track' : command === 'prev' ? 'previous track' : 'playpause'}`
+    } else if (sLower.includes('music') || sLower.includes('apple')) {
+      script = `tell application "Music" to ${command === 'playpause' ? 'playpause' : command === 'next' ? 'next track' : command === 'prev' ? 'previous track' : 'playpause'}`
+    } else {
+      if (command === 'playpause') {
+        script = `
+          if application "Spotify" is running then
+            tell application "Spotify" to playpause
+          else if application "Music" is running then
+            tell application "Music" to playpause
+          else
+            tell application "System Events" to key code 16
+          end if
+        `
+      } else if (command === 'next') {
+        script = `
+          if application "Spotify" is running then
+            tell application "Spotify" to next track
+          else if application "Music" is running then
+            tell application "Music" to next track
+          else
+            tell application "System Events" to key code 19
+          end if
+        `
+      } else if (command === 'prev') {
+        script = `
+          if application "Spotify" is running then
+            tell application "Spotify" to previous track
+          else if application "Music" is running then
+            tell application "Music" to previous track
+          else
+            tell application "System Events" to key code 20
+          end if
+        `
+      }
     }
     if (script) {
       exec(`osascript -e '${script}'`, (err) => {
@@ -1760,7 +1851,17 @@ ipcMain.on('media-command', (_, command, value, source) => {
   const nextVal = value !== null && value !== undefined ? String(value) : ''
   const nextSrc = source !== null && source !== undefined ? String(source) : ''
   const sent = sendDaemonCommand(`MEDIA:${command}:${nextVal}:${nextSrc}`)
-  if (!sent) startWindowsMediaDaemon()
+  if (!sent) {
+    startWindowsMediaDaemon()
+    // Fallback to Windows global media key event if SMTC session fails
+    let vkCode = 0
+    if (command === 'playpause') vkCode = 0xB3 // VK_MEDIA_PLAY_PAUSE
+    else if (command === 'next') vkCode = 0xB0 // VK_MEDIA_NEXT_TRACK
+    else if (command === 'prev' || command === 'previous') vkCode = 0xB1 // VK_MEDIA_PREV_TRACK
+    if (vkCode > 0) {
+      runPowerShell(`$w = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);' -Name "WKey${vkCode}" -Namespace "WKey" -PassThru; $w::keybd_event(${vkCode}, 0, 0, 0); $w::keybd_event(${vkCode}, 0, 2, 0);`).catch(() => {})
+    }
+  }
 })
 
 // ─── IPC: Settings sync ──────────────────────────────────────────────────────
@@ -1784,7 +1885,8 @@ ipcMain.on('update-settings', (event, settings) => {
       startAgentDaemon()
     } else if (agentProcess.stdin && !agentProcess.stdin.destroyed) {
       try {
-        agentProcess.stdin.write(JSON.stringify({ type: 'update_config', bingApiKey: next.bingApiKey || '' }) + '\n')
+        agentProcess.stdin.write(JSON.stringify({ type: 'update_config', bingApiKey: next.bingApiKey || '', bingMaxResults: next.bingMaxResults || 10 }) + '\n')
+        agentProcess.stdin.write(JSON.stringify({ type: 'set_permissions_enabled', enabled: next.agentPermissionsEnabled !== false }) + '\n')
       } catch {}
     }
   } else if (agentProcess) {
@@ -1799,6 +1901,80 @@ ipcMain.on('update-settings', (event, settings) => {
       win.webContents.send('settings-updated', next)
     }
   })
+})
+
+ipcMain.handle('export-profile', async (_, profileData) => {
+  try {
+    const { dialog } = require('electron')
+    const { filePath } = await dialog.showSaveDialog({
+      title: 'Export Notch System Profile',
+      defaultPath: path.join(app.getPath('downloads'), 'notch-profile.json'),
+      filters: [{ name: 'JSON Profiles', extensions: ['json'] }]
+    })
+    if (filePath) {
+      fs.writeFileSync(filePath, JSON.stringify(profileData || {}, null, 2), 'utf8')
+      return { success: true, path: filePath }
+    }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
+  return { success: false }
+})
+
+ipcMain.handle('import-profile', async () => {
+  try {
+    const { dialog } = require('electron')
+    const { filePaths } = await dialog.showOpenDialog({
+      title: 'Import Notch System Profile',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON Profiles', extensions: ['json'] }]
+    })
+    if (filePaths && filePaths.length > 0) {
+      const content = fs.readFileSync(filePaths[0], 'utf8')
+      const parsed = JSON.parse(content)
+      return { success: true, profile: parsed, path: filePaths[0] }
+    }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
+  return { success: false }
+})
+
+ipcMain.handle('browse-and-launch-exe', async () => {
+  try {
+    const { dialog } = require('electron')
+    const { filePaths } = await dialog.showOpenDialog({
+      title: 'Select Executable Program to Load',
+      properties: ['openFile'],
+      filters: [{ name: 'Executables & Shortcuts', extensions: ['exe', 'cmd', 'bat', 'app', 'lnk'] }]
+    })
+    if (filePaths && filePaths.length > 0) {
+      const targetPath = filePaths[0]
+      if (process.platform === 'win32') {
+        exec(`start "" "${targetPath}"`, { windowsHide: true })
+      } else {
+        exec(`open "${targetPath}"`)
+      }
+      return { success: true, path: targetPath, name: path.basename(targetPath) }
+    }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
+  return { success: false }
+})
+
+ipcMain.handle('launch-exe-file', async (_, exePath) => {
+  try {
+    if (!exePath) return { success: false, error: 'No path provided' }
+    if (process.platform === 'win32') {
+      exec(`start "" "${exePath}"`, { windowsHide: true })
+    } else {
+      exec(`open "${exePath}"`)
+    }
+    return { success: true, path: exePath }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
 })
 
 ipcMain.handle('get-settings', () => loadSettings())
@@ -2001,22 +2177,28 @@ function checkGitUpdate() {
 function performGitUpdate() {
   return new Promise((resolve) => {
     const cwd = path.join(__dirname, '..')
-    exec('git pull --rebase origin main', { cwd, timeout: 45000 }, (err, stdout, stderr) => {
-      const pullOutput = (stdout || '') + (stderr || '')
-      if (err) {
-        exec('git pull', { cwd, timeout: 45000 }, (err2, stdout2) => {
-          if (err2) {
-            return resolve({ ok: false, error: err2.message || 'Git pull failed' })
-          }
-          finishUpdate(stdout2)
-        })
-      } else {
-        finishUpdate(pullOutput)
-      }
+    exec('git rev-parse --abbrev-ref HEAD', { cwd }, (bErr, bStdout) => {
+      const branch = (bStdout || 'main').trim() || 'main'
+      exec(`git pull --rebase origin ${branch}`, { cwd, timeout: 45000 }, (err, stdout, stderr) => {
+        const pullOutput = (stdout || '') + (stderr || '')
+        if (err) {
+          exec(`git pull origin ${branch}`, { cwd, timeout: 45000 }, (err2, stdout2, stderr2) => {
+            if (err2) {
+              return resolve({ ok: false, error: err2.message || (stderr2 || '').trim() || 'Git pull failed' })
+            }
+            finishUpdate(stdout2)
+          })
+        } else {
+          finishUpdate(pullOutput)
+        }
+      })
     })
 
     function finishUpdate(output) {
-      exec('npm run build', { cwd, timeout: 90000 }, () => {
+      exec('npm run build', { cwd, timeout: 90000 }, (buildErr, buildStdout, buildStderr) => {
+        if (buildErr) {
+          return resolve({ ok: false, error: `Build failed: ${buildErr.message || buildStderr}` })
+        }
         BrowserWindow.getAllWindows().forEach((win) => {
           if (!win.isDestroyed()) {
             win.webContents.send('agent-msg', {
@@ -2204,9 +2386,11 @@ function startAgentDaemon() {
     envCopy.PYTHONUNBUFFERED = '1'
     envCopy.PYTHONIOENCODING = 'utf-8'
     envCopy.EDGE_GO_SETTINGS_PATH = getSettingsPath()
+    envCopy.EDGE_GO_AGENT_PERMISSIONS = savedSettings.agentPermissionsEnabled !== false ? '1' : '0'
     if (savedSettings.bingApiKey) {
       envCopy.BING_API_KEY = savedSettings.bingApiKey
     }
+    envCopy.BING_MAX_RESULTS = String(savedSettings.bingMaxResults || 10)
     
     let spawnedProcess;
     try {
@@ -2234,8 +2418,10 @@ function startAgentDaemon() {
           }
           if (payload.type === 'wake') {
             if (mainWindow && !mainWindow.isDestroyed()) {
+              if (mainWindow.isMinimized()) mainWindow.restore()
               notchState.state = 'expanded'
               showMainWindow()
+              try { mainWindow.focus() } catch {}
               applyNotchBounds(true)
               mainWindow.webContents.send('agent-msg', payload)
             }
@@ -2356,6 +2542,36 @@ ipcMain.on('set-voice-listener-suspended', (_, suspended) => {
   }
 })
 
+ipcMain.handle('check-mic-permission', () => {
+  if (typeof systemPreferences?.getMediaAccessStatus === 'function') {
+    try {
+      return systemPreferences.getMediaAccessStatus('microphone')
+    } catch {}
+  }
+  return 'granted'
+})
+
+ipcMain.handle('request-mic-permission', async () => {
+  if (typeof systemPreferences?.askForMediaAccess === 'function') {
+    try {
+      const granted = await systemPreferences.askForMediaAccess('microphone')
+      return granted ? 'granted' : 'denied'
+    } catch {}
+  }
+  return 'granted'
+})
+
+ipcMain.on('send-agent-permission-response', (_, requestId, granted) => {
+  if (agentProcess && agentProcess.stdin && !agentProcess.stdin.destroyed) {
+    try {
+      const payload = JSON.stringify({ type: 'permission_response', requestId, granted: !!granted })
+      agentProcess.stdin.write(payload + '\n')
+    } catch (e) {
+      console.error('[Agent daemon] Stdin permission response error:', e.message)
+    }
+  }
+})
+
 // ─── App lifecycle ─────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -2367,9 +2583,14 @@ app.whenReady().then(() => {
   }
 
   startWindowsMediaDaemon()   // no-op on non-Windows
-  if (savedSettings.betaModeEnabled) {
+  if (savedSettings.betaModeEnabled !== false) {
     startAgentDaemon()
   }
+  
+  if (process.platform === 'darwin' && typeof systemPreferences?.askForMediaAccess === 'function') {
+    systemPreferences.askForMediaAccess('microphone').catch(() => {})
+  }
+
   createWindow()
   createPointerOverlayWindow()
 

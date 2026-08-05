@@ -16,6 +16,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import pathlib
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 # Thread-safe print override to prevent concurrent stdout stream corruption
@@ -60,6 +61,31 @@ try:
 except ImportError:
     HAS_SPEECH = False
 
+# Vosk offline speech recognition import
+try:
+    import vosk
+    HAS_VOSK = True
+except ImportError:
+    HAS_VOSK = False
+
+def recognize_speech_audio(r, audio) -> str:
+    """Tries offline Vosk recognition first, falling back to Google Speech Recognition."""
+    if not HAS_SPEECH or not audio:
+        return ""
+    if HAS_VOSK:
+        try:
+            res_str = r.recognize_vosk(audio)
+            res_json = json.loads(res_str)
+            text = (res_json.get('text') or '').strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    try:
+        return r.recognize_google(audio).strip()
+    except Exception:
+        return ""
+
 # PyAutoGUI import
 try:
     import pyautogui
@@ -73,6 +99,47 @@ wake_word_enabled = True
 wake_word_thread_active = False
 agent_busy = False
 voice_listener_suspended = False
+agent_permissions_enabled = os.environ.get("EDGE_GO_AGENT_PERMISSIONS", "1") == "1"
+permission_futures = {}
+
+async def request_action_permission(action_name, details, risk_level="medium"):
+    """
+    Emits a permission_request event to Electron stdout and waits for the user to Allow or Deny.
+    Returns True if granted, False if denied.
+    """
+    global agent_permissions_enabled
+    if not agent_permissions_enabled:
+        return True
+
+    req_id = str(uuid.uuid4())[:8]
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    permission_futures[req_id] = fut
+
+    print(json.dumps({
+        "type": "permission_request",
+        "requestId": req_id,
+        "action": action_name,
+        "details": details,
+        "risk": risk_level
+    }), flush=True)
+
+    print(json.dumps({
+        "type": "status_log",
+        "message": f"Waiting for user permission to execute: '{action_name}'..."
+    }), flush=True)
+
+    try:
+        granted = await asyncio.wait_for(fut, timeout=60.0)
+        return granted
+    except asyncio.TimeoutError:
+        print(json.dumps({
+            "type": "status_log",
+            "message": "Permission request timed out. Action denied."
+        }), flush=True)
+        return False
+    finally:
+        permission_futures.pop(req_id, None)
 
 # Stopwords for TF-IDF
 STOPWORDS = {
@@ -552,6 +619,16 @@ def setup_intent_classifier():
             "go to previous track", "play or pause music", "stop song playing",
             "resume audio podcast", "next track please", "previous song track",
             "media skip forward", "media go back one"
+        ],
+        "list_files": [
+            "list files", "show directory listings", "ls", "dir",
+            "list folder contents", "show desktop files", "list documents",
+            "show files in current folder", "directory listings", "list files in desktop",
+            "show directory files", "list files in repository"
+        ],
+        "launch_exe": [
+            "load exe", "run executable", "open program exe", "launch app exe",
+            "run exe file", "execute binary program", "load application exe", "start exe"
         ]
     }
     
@@ -707,12 +784,23 @@ def get_bing_api_key():
             pass
     return ''
 
-def web_search(query: str, max_results: int = 5) -> str:
+def get_bing_max_results() -> int:
+    """Retrieves Bing max search results limit (capped at 10)."""
+    val = os.environ.get('BING_MAX_RESULTS')
+    if val:
+        try:
+            return min(10, max(1, int(val)))
+        except ValueError:
+            pass
+    return 10
+
+def web_search(query: str, max_results: int = 10) -> str:
     """Searches Microsoft Bing Web Search API (if key present) or DuckDuckGo/Bing fallback."""
     query = (query or '').strip()
     if not query:
         return json.dumps({'query': '', 'results': [], 'count': 0, 'provider': 'None'})
 
+    max_results = min(10, max(1, get_bing_max_results() if max_results is None else max_results))
     encoded = urllib.parse.quote_plus(query)
     bing_key = get_bing_api_key()
     results = []
@@ -743,60 +831,60 @@ def web_search(query: str, max_results: int = 5) -> str:
         except Exception:
             pass
 
-    # 2. Fallback: DuckDuckGo HTML Search
-    provider = 'DuckDuckGo / Bing Search'
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={encoded}"
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
-        })
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            html = resp.read().decode('utf-8', errors='replace')
-
-        title_pattern = re.compile(r'<a[^>]+class="result__a"[^>]*>([^<]+)</a>', re.I)
-        snippet_pattern = re.compile(r'<a[^>]+class="result__snippet"[^>]*>([^<]+)</a>', re.I)
-        url_pattern = re.compile(r'<a[^>]+class="result__url"[^>]*>([^<]+)</a>', re.I)
-
-        titles = title_pattern.findall(html)
-        snippets = snippet_pattern.findall(html)
-        urls = url_pattern.findall(html)
-
-        for i in range(min(max_results, len(titles))):
-            snippet = snippets[i].strip() if i < len(snippets) else ''
-            result_url = urls[i].strip() if i < len(urls) else ''
-            clean_title = re.sub(r'<[^>]+>', '', titles[i]).strip()
-            clean_snippet = re.sub(r'<[^>]+>', '', snippet).strip()
-            if clean_title:
-                results.append({
-                    'rank': i + 1,
-                    'title': clean_title,
-                    'snippet': clean_snippet,
-                    'url': result_url if result_url.startswith('http') else f'https://{result_url}'
-                })
-    except Exception:
-        pass
-
-    # 3. Fallback: Bing HTML Search
+    # 2. Fallback: DuckDuckGo Instant Answer API (Zero-Config JSON API)
     if not results:
+        provider = 'DuckDuckGo Online Search'
         try:
-            bing_url = f"https://www.bing.com/search?q={encoded}&setlang=en"
-            req2 = urllib.request.Request(bing_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept-Language': 'en-US,en;q=0.9'
+            ddg_api_url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_html=1&skip_disambig=1"
+            req_ddg = urllib.request.Request(ddg_api_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             })
-            with urllib.request.urlopen(req2, timeout=8) as resp2:
-                html2 = resp2.read().decode('utf-8', errors='replace')
-            bing_titles = re.findall(r'<h2[^>]*><a[^>]*>([^<]+)</a></h2>', html2)
-            bing_snips = re.findall(r'<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([^<]+)</p>', html2)
-            for i in range(min(max_results, len(bing_titles))):
-                clean_title = re.sub(r'<[^>]+>', '', bing_titles[i]).strip()
-                if clean_title:
+            with urllib.request.urlopen(req_ddg, timeout=6) as resp_ddg:
+                ddg_data = json.loads(resp_ddg.read().decode('utf-8'))
+                heading = ddg_data.get('Heading', '')
+                abstract = ddg_data.get('AbstractText', '')
+                abstract_url = ddg_data.get('AbstractURL', '')
+                if abstract and heading:
                     results.append({
-                        'rank': i + 1,
-                        'title': clean_title,
-                        'snippet': re.sub(r'<[^>]+>', '', bing_snips[i] if i < len(bing_snips) else '').strip(),
-                        'url': f'https://www.bing.com/search?q={encoded}'
+                        'rank': 1,
+                        'title': heading,
+                        'snippet': abstract,
+                        'url': abstract_url or f'https://duckduckgo.com/?q={encoded}'
+                    })
+                
+                related = ddg_data.get('RelatedTopics', [])
+                for topic in related:
+                    if len(results) >= max_results: break
+                    if isinstance(topic, dict) and topic.get('Text'):
+                        t_text = topic.get('Text', '')
+                        t_url = topic.get('FirstURL', f'https://duckduckgo.com/?q={encoded}')
+                        results.append({
+                            'rank': len(results) + 1,
+                            'title': t_text.split(' - ')[0] if ' - ' in t_text else t_text[:60],
+                            'snippet': t_text,
+                            'url': t_url
+                        })
+        except Exception:
+            pass
+
+    # 3. Fallback: Wikipedia Search API
+    if not results:
+        provider = 'Wikipedia Online Encyclopedia'
+        try:
+            wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded}&format=json"
+            req_wiki = urllib.request.Request(wiki_url, headers={'User-Agent': 'EdgeGo/2.2.0'})
+            with urllib.request.urlopen(req_wiki, timeout=6) as resp_wiki:
+                wiki_data = json.loads(resp_wiki.read().decode('utf-8'))
+                search_hits = wiki_data.get('query', {}).get('search', [])
+                for hit in search_hits[:max_results]:
+                    title = hit.get('title', '')
+                    snip = re.sub(r'<[^>]+>', '', hit.get('snippet', ''))
+                    pageid = hit.get('pageid', '')
+                    results.append({
+                        'rank': len(results) + 1,
+                        'title': title,
+                        'snippet': snip,
+                        'url': f'https://en.wikipedia.org/?curid={pageid}' if pageid else f'https://en.wikipedia.org/wiki/{urllib.parse.quote(title)}'
                     })
         except Exception:
             pass
@@ -2039,10 +2127,27 @@ def open_microsoft_app(app: str, content: str = '', action: str = 'open') -> str
     # Open app
     try:
         if IS_WINDOWS:
+            if HAS_WIN32 and matched_key == 'word':
+                try:
+                    w = win32com.client.Dispatch('Word.Application')
+                    w.Visible = True
+                    w.Documents.Add()
+                    result.update({'status': 'success', 'method': 'com'})
+                    return json.dumps(result)
+                except Exception:
+                    pass
             subprocess.Popen(f'start {exe_name}', shell=True)
-        result.update({'status': 'success', 'method': 'shell'})
+            result.update({'status': 'success', 'method': 'shell'})
+        else:
+            try:
+                subprocess.Popen(['open', '-a', display_name])
+                result.update({'status': 'success', 'method': 'open_mac'})
+            except Exception:
+                webbrowser.open('https://word.office.com')
+                result.update({'status': 'success', 'method': 'web_office'})
     except Exception as e:
-        result.update({'status': 'error', 'error': str(e)})
+        webbrowser.open('https://word.office.com')
+        result.update({'status': 'fallback', 'url': 'https://word.office.com', 'error': str(e)})
 
     return json.dumps(result)
 
@@ -2238,87 +2343,89 @@ def speech_listener():
         return
 
     r = sr.Recognizer()
+    r.dynamic_energy_threshold = True
+    r.energy_threshold = 150
+    r.pause_threshold = 0.7
+
     try:
         mic = sr.Microphone()
     except Exception as e:
         print(json.dumps({"type": "status_log", "message": f"Microphone init skipped: {str(e)}"}), flush=True)
-        print(json.dumps({"type": "error", "message": "Voice Wake Word Engine: Microphone failed to initialize. Please check permissions in Windows Settings (Settings > Privacy & security > Microphone) and ensure your recording device is connected."}), flush=True)
+        print(json.dumps({"type": "error", "message": "Voice Wake Word Engine: Microphone failed to initialize. Please check permissions in system settings and ensure recording device is connected."}), flush=True)
         return
 
-    print(json.dumps({"type": "status_log", "message": "Voice wake engine active. Listening for 'Hey Clicky'..."}), flush=True)
-    
+    print(json.dumps({"type": "status_log", "message": "Voice wake engine active. Listening for 'Hey Clicky' or 'Hey Notch'..."}), flush=True)
+
+    wake_words = [
+        "clicky", "clickies", "cliky", "cliki", "hey click", "hey clicky", "hi clicky", "wake up clicky",
+        "notch", "hey notch", "hi notch", "wake up notch", "alexa clicky"
+    ]
+
     try:
         with mic as source:
-            r.adjust_for_ambient_noise(source, duration=0.8)
-    except Exception:
-        pass
+            try:
+                r.adjust_for_ambient_noise(source, duration=0.5)
+            except Exception:
+                pass
 
-    while True:
-        if not wake_word_enabled or agent_busy or voice_listener_suspended:
-            time.sleep(0.5)
-            continue
-            
-        try:
-            with mic as source:
-                audio = r.listen(source, timeout=2.0, phrase_time_limit=2.5)
-            
-            # Recheck status in case it changed while listening
-            if agent_busy or voice_listener_suspended:
-                continue
-                
-            text = r.recognize_google(audio).lower()
-            
-            # Strict matches for "Hey Clicky" phonetics to avoid triggering on standalone common words
-            wake_words = ["clicky", "clickies", "cliky", "cliki", "hey click", "hey clicky", "hi clicky", "wake up clicky"]
-            matched_wake = None
-            for w in wake_words:
-                if w in text:
-                    matched_wake = w
-                    break
-                    
-            if matched_wake:
-                # Find if there is any command content spoken after the wake word in one go
-                parts = text.split(matched_wake, 1)
-                query = parts[1].strip() if len(parts) > 1 else ""
-                
-                # Show the Notch bar / play wake sound
-                print(json.dumps({"type": "wake"}), flush=True)
-                
-                if len(query) > 1:
-                    # Direct query parsed from the initial utterance
-                    print(json.dumps({"type": "status_log", "message": f"Recognized voice query: '{query}'"}), flush=True)
-                    print(json.dumps({"type": "voice_query", "text": query}), flush=True)
-                else:
-                    # Wake word only: immediately listen for the next sentence/command
-                    print(json.dumps({"type": "status_log", "message": "Listening for your command..."}), flush=True)
-                    try:
-                        # Brief sleep to allow chime sound to play and finish
-                        time.sleep(1.2)
-                        if agent_busy or voice_listener_suspended:
-                            continue
-                            
-                        with mic as cmd_source:
-                            audio_cmd = r.listen(cmd_source, timeout=15.0, phrase_time_limit=20.0)
-                        
-                        if agent_busy or voice_listener_suspended:
-                            continue
-                            
-                        cmd_text = r.recognize_google(audio_cmd).strip()
-                        if cmd_text:
-                            print(json.dumps({"type": "voice_query", "text": cmd_text}), flush=True)
+            while True:
+                if not wake_word_enabled or agent_busy or voice_listener_suspended:
+                    time.sleep(0.3)
+                    continue
+
+                try:
+                    audio = r.listen(source, timeout=4.0, phrase_time_limit=4.0)
+
+                    if agent_busy or voice_listener_suspended:
+                        continue
+
+                    text = recognize_speech_audio(r, audio).lower()
+
+                    matched_wake = None
+                    for w in wake_words:
+                        if w in text:
+                            matched_wake = w
+                            break
+
+                    if matched_wake:
+                        parts = text.split(matched_wake, 1)
+                        query = parts[1].strip() if len(parts) > 1 else ""
+
+                        print(json.dumps({"type": "wake"}), flush=True)
+
+                        if len(query) > 1:
+                            print(json.dumps({"type": "status_log", "message": f"Recognized voice query: '{query}'"}), flush=True)
+                            print(json.dumps({"type": "voice_query", "text": query}), flush=True)
                         else:
-                            print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
-                            print(json.dumps({"type": "status", "state": "idle"}), flush=True)
-                    except sr.WaitTimeoutError:
-                        print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
-                        print(json.dumps({"type": "status", "state": "idle"}), flush=True)
-                    except Exception:
-                        print(json.dumps({"type": "status_log", "message": "Voice command not recognized."}), flush=True)
-                        print(json.dumps({"type": "status", "state": "idle"}), flush=True)
-        except sr.WaitTimeoutError:
-            pass
-        except Exception:
-            time.sleep(0.5)
+                            print(json.dumps({"type": "status_log", "message": "Listening for your command..."}), flush=True)
+                            try:
+                                time.sleep(0.4)
+                                if agent_busy or voice_listener_suspended:
+                                    continue
+
+                                audio_cmd = r.listen(source, timeout=10.0, phrase_time_limit=15.0)
+
+                                if agent_busy or voice_listener_suspended:
+                                    continue
+
+                                cmd_text = recognize_speech_audio(r, audio_cmd)
+                                if cmd_text:
+                                    print(json.dumps({"type": "voice_query", "text": cmd_text}), flush=True)
+                                else:
+                                    print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                                    print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+                            except sr.WaitTimeoutError:
+                                print(json.dumps({"type": "status_log", "message": "Listening timed out."}), flush=True)
+                                print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+                            except Exception:
+                                print(json.dumps({"type": "status_log", "message": "Voice command not recognized."}), flush=True)
+                                print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+                except sr.WaitTimeoutError:
+                    pass
+                except Exception:
+                    time.sleep(0.2)
+    except Exception as e:
+        print(json.dumps({"type": "status_log", "message": f"Speech loop stopped: {str(e)}"}), flush=True)
 
 async def read_stdin_lines(loop):
     """Asynchronously read lines from stdin."""
@@ -2332,12 +2439,13 @@ async def read_stdin_lines(loop):
 async def process_prompt(prompt_text):
     global agent_busy
     agent_busy = True
-    prompt_lower = prompt_text.lower()
-    
-    # 1. State: Thinking & stream thoughts
-    print(json.dumps({"type": "status", "state": "thinking"}), flush=True)
-    print(json.dumps({"type": "thought", "text": "Tokenizing prompt and analyzing intent offline...\n"}), flush=True)
-    await asyncio.sleep(0.3)
+    try:
+        prompt_lower = prompt_text.lower()
+        
+        # 1. State: Thinking & stream thoughts
+        print(json.dumps({"type": "status", "state": "thinking"}), flush=True)
+        print(json.dumps({"type": "thought", "text": "Tokenizing prompt and analyzing intent offline...\n"}), flush=True)
+        await asyncio.sleep(0.3)
     
     # Rule-based intent overrides for absolute reliability
     matched_intent = None
@@ -2398,7 +2506,38 @@ async def process_prompt(prompt_text):
     if matched_intent and matched_intent != "qa_search":
         auto_train_intent(matched_intent, prompt_text)
 
-    # 2. Orhchestrate Subagents, Tools and Build response
+    # Check action permission before executing sensitive intent
+    permission_actions = {
+        "click": ("Click Coordinates", f"Click mouse at screen coordinates for: '{prompt_text}'", "low"),
+        "git_update": ("Execute Git Update", "Check remote repository and fetch updates using Git", "medium"),
+        "git": ("Run Git Command", f"Execute command line: '{prompt_text}'", "medium"),
+        "web_search": ("Search Web", f"Perform web search query: '{prompt_text}'", "low"),
+        "create_html": ("Create HTML Webpage", f"Generate HTML document for: '{prompt_text}'", "medium"),
+        "create_document": ("Create Document", f"Generate document file for: '{prompt_text}'", "medium"),
+        "create_presentation": ("Create Slideshow", f"Generate PowerPoint presentation for: '{prompt_text}'", "medium"),
+        "play_video": ("Launch Media Player", f"Open browser/media player to play: '{prompt_text}'", "low"),
+        "microsoft_app": ("Launch Application", f"Launch Windows application for: '{prompt_text}'", "medium"),
+        "browser": ("Open Web Browser", f"Open web browser for: '{prompt_text}'", "low"),
+        "notion": ("Open Notion", f"Access Notion workspace for: '{prompt_text}'", "low"),
+        "instagram": ("Open Instagram", f"Access social media client for: '{prompt_text}'", "low"),
+        "whatsapp": ("Open WhatsApp", f"Access messaging client for: '{prompt_text}'", "low"),
+        "screenshot": ("Take Screenshot", "Capture current display screenshot", "low"),
+        "multi_agent": ("Spawn Multi-Agent Pipeline", f"Run multi-agent subtasks for: '{prompt_text}'", "high"),
+        "list_files": ("List Directory Files", f"Inspect and list directory contents for: '{prompt_text}'", "low"),
+        "launch_exe": ("Launch Executable Program", f"Load and execute program for: '{prompt_text}'", "medium"),
+    }
+
+    if matched_intent in permission_actions:
+        perm_title, perm_details, perm_risk = permission_actions[matched_intent]
+        granted = await request_action_permission(perm_title, perm_details, perm_risk)
+        if not granted:
+            final_reply = f"⚠️ **Action Cancelled**\n\nUser permission was denied for action: **{perm_title}**."
+            print(json.dumps({"type": "done", "text": final_reply}), flush=True)
+            print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+            agent_busy = False
+            return
+
+    # 2. Orchestrate Subagents, Tools and Build response
     final_reply = ""
     
     if matched_intent == "click":
@@ -2706,6 +2845,87 @@ async def process_prompt(prompt_text):
     # ══════════════════════════════════════════════════════════════
     # NEW INTENT BRANCHES
     # ══════════════════════════════════════════════════════════════
+
+    elif matched_intent == "launch_exe":
+        print(json.dumps({"type": "thought", "text": f"Preparing executable program launcher for: '{prompt_text}'...\n"}), flush=True)
+
+        print(json.dumps({"type": "subagent_start", "id": "sub_exe", "description": "Launch Executable Program"}), flush=True)
+        print(json.dumps({"type": "tool_call", "name": "launch_executable", "args": {"prompt": prompt_text}}), flush=True)
+
+        # Extract path if explicit path mentioned
+        matched_path = None
+        for word in prompt_text.split():
+            if word.lower().endswith(('.exe', '.cmd', '.bat', '.app', '.lnk')) or '\\' in word or '/' in word:
+                matched_path = word.strip('"').strip("'")
+                break
+
+        if matched_path and os.path.exists(matched_path):
+            try:
+                if IS_WINDOWS:
+                    subprocess.Popen(f'start "" "{matched_path}"', shell=True)
+                else:
+                    subprocess.Popen(['open', matched_path])
+                print(json.dumps({"type": "tool_done", "result": f"Launched executable: {matched_path}"}), flush=True)
+                final_reply = f"🚀 **Executable Launched Successfully!**\n\nProgram path: `{matched_path}`"
+            except Exception as e:
+                print(json.dumps({"type": "tool_done", "result": f"Execution error: {str(e)}"}), flush=True)
+                final_reply = f"⚠️ **Executable Launch Failed:** {str(e)}"
+        else:
+            print(json.dumps({"type": "tool_done", "result": "Triggering Windows File Explorer launcher dialog"}), flush=True)
+            final_reply = (
+                f"🚀 **Program Launcher Active**\n\n"
+                f"Use the **'🚀 Load .exe Program'** button in the Notch Sync Bridge or Agent Panel to select any executable (`.exe`) file from File Explorer!"
+            )
+
+    elif matched_intent == "list_files":
+        print(json.dumps({"type": "thought", "text": f"Scanning directory contents for: '{prompt_text}'...\n"}), flush=True)
+
+        target_dir = REPO_ROOT
+        p_lower = prompt_lower
+        if 'desktop' in p_lower:
+            target_dir = str(DESKTOP_PATH)
+        elif 'document' in p_lower:
+            target_dir = str(DOCUMENTS_PATH)
+
+        print(json.dumps({"type": "subagent_start", "id": "sub_list", "description": f"Scan directory: '{os.path.basename(target_dir)}'"}), flush=True)
+        print(json.dumps({"type": "tool_call", "name": "list_directory", "args": {"path": target_dir}}), flush=True)
+
+        items = []
+        try:
+            entries = list(os.scandir(target_dir))
+            entries.sort(key=lambda e: (not e.is_dir(), e.name.lower()))
+            for entry in entries:
+                if entry.name.startswith('.'): continue
+                is_dir = entry.is_dir()
+                size_str = ""
+                if not is_dir:
+                    try:
+                        sz = entry.stat().st_size
+                        size_str = f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B"
+                    except Exception:
+                        size_str = ""
+                items.append({
+                    "name": entry.name,
+                    "isDir": is_dir,
+                    "size": size_str,
+                    "icon": "📁" if is_dir else ("📄" if not entry.name.endswith(('.html', '.py', '.js')) else "⚡")
+                })
+        except Exception as e:
+            items = []
+
+        print(json.dumps({"type": "tool_done", "result": f"Found {len(items)} items in {target_dir}"}), flush=True)
+
+        formatted_lines = []
+        for it in items[:35]:
+            sz = f" *({it['size']})*" if it['size'] else ""
+            formatted_lines.append(f"- {it['icon']} **{it['name']}**{sz}")
+        formatted_items = "\n".join(formatted_lines)
+
+        final_reply = (
+            f"📁 **Directory Listing:** `{target_dir}`\n\n"
+            f"Found **{len(items)}** items:\n\n"
+            f"{formatted_items if items else '*No files found in directory.*'}"
+        )
 
     elif matched_intent == "web_search":
         # Extract query from prompt
@@ -3286,15 +3506,19 @@ async def process_prompt(prompt_text):
                 f"Try asking about topics documented in `AGENTS.md` or `README.md` (e.g. *\"how does the overlay work\"*, *\"explain the worker proxy\"*)."
             )
 
-    # 3. Stream final response text chunks
-    chunk_size = 20
-    for i in range(0, len(final_reply), chunk_size):
-        print(json.dumps({"type": "response_chunk", "text": final_reply[i:i+chunk_size]}), flush=True)
-        await asyncio.sleep(0.04)
-        
-    print(json.dumps({"type": "done", "text": final_reply}), flush=True)
-    print(json.dumps({"type": "status", "state": "idle"}), flush=True)
-    agent_busy = False
+        chunk_size = 20
+        for i in range(0, len(final_reply), chunk_size):
+            print(json.dumps({"type": "response_chunk", "text": final_reply[i:i+chunk_size]}), flush=True)
+            await asyncio.sleep(0.04)
+            
+        print(json.dumps({"type": "done", "text": final_reply}), flush=True)
+    except Exception as e:
+        err_msg = f"Task execution error: {str(e)}"
+        print(json.dumps({"type": "error", "message": err_msg, "traceback": traceback.format_exc()}), flush=True)
+        print(json.dumps({"type": "done", "text": f"⚠️ **Execution Error:** {str(e)}"}), flush=True)
+    finally:
+        print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+        agent_busy = False
 
 async def main():
     loop = asyncio.get_running_loop()
@@ -3331,6 +3555,21 @@ async def main():
                 if "bingApiKey" in payload:
                     os.environ["BING_API_KEY"] = payload.get("bingApiKey") or ""
                     print(json.dumps({"type": "status_log", "message": "Updated Bing Web Search API configuration."}), flush=True)
+                continue
+
+            elif payload.get("type") == "permission_response":
+                req_id = payload.get("requestId")
+                granted = bool(payload.get("granted", False))
+                if req_id in permission_futures:
+                    fut = permission_futures[req_id]
+                    if not fut.done():
+                        fut.set_result(granted)
+                continue
+
+            elif payload.get("type") == "set_permissions_enabled":
+                global agent_permissions_enabled
+                agent_permissions_enabled = bool(payload.get("enabled", True))
+                print(json.dumps({"type": "status_log", "message": f"Agent permissions active: {agent_permissions_enabled}"}), flush=True)
                 continue
 
             elif payload.get("type") == "prompt":

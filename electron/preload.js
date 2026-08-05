@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings sync
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings) => ipcRenderer.send('update-settings', settings),
+  exportProfile: (profileData) => ipcRenderer.invoke('export-profile', profileData),
+  importProfile: () => ipcRenderer.invoke('import-profile'),
+  browseAndLaunchExe: () => ipcRenderer.invoke('browse-and-launch-exe'),
+  launchExeFile: (exePath) => ipcRenderer.invoke('launch-exe-file', exePath),
 
   // Events from main → renderer
   onSettingsUpdated: (cb) => {
@@ -80,6 +84,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   restartAgentDaemon: () => ipcRenderer.send('restart-agent-daemon'),
   setWakeWord: (enabled) => ipcRenderer.send('set-wake-word', enabled),
   setVoiceListenerSuspended: (suspended) => ipcRenderer.send('set-voice-listener-suspended', suspended),
+  checkMicPermission: () => ipcRenderer.invoke('check-mic-permission'),
+  requestMicPermission: () => ipcRenderer.invoke('request-mic-permission'),
+  sendAgentPermissionResponse: (requestId, granted) => ipcRenderer.send('send-agent-permission-response', requestId, granted),
   onAgentMsg: (cb) => {
     const handler = (_event, data) => cb(data)
     ipcRenderer.on('agent-msg', handler)

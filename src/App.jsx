@@ -4,6 +4,7 @@ import VolumeHUD from './components/VolumeHUD.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
 import ClipboardDock from './components/ClipboardDock.jsx'
 import ControlCenter from './components/ControlCenter.jsx'
+import NotchSyncBridge from './components/NotchSyncBridge.jsx'
 import {
   applySettingsToDocument,
   loadStoredSettings,
@@ -88,10 +89,13 @@ export default function App() {
   const [route, setRoute] = useState(window.location.hash)
   const [controlCenterOpen, setControlCenterOpen] = useState(false)
   const [clipboardOpen, setClipboardOpen] = useState(false)
+  const [syncBridgeOpen, setSyncBridgeOpen] = useState(false)
+  const [wakeActive, setWakeActive] = useState(false)
   const [volumeHUD, setVolumeHUD] = useState({ visible: false, level: 50 })
 
   const positionTimerRef = useRef(null)
   const volumeTimerRef = useRef(null)
+  const wakeTimerRef = useRef(null)
   const remoteSettingsRef = useRef(false)
 
   useEffect(() => {
@@ -101,6 +105,22 @@ export default function App() {
     if (isMac) {
       document.documentElement.classList.add('platform-darwin')
     }
+
+    // Auto-prompt for microphone access on app startup so macOS/Windows requests system mic permission
+    const initMicPermission = async () => {
+      try {
+        if (window.electronAPI?.requestMicPermission) {
+          await window.electronAPI.requestMicPermission()
+        }
+        if (navigator.mediaDevices?.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+          stream.getTracks().forEach(track => track.stop())
+        }
+      } catch (e) {
+        console.warn('[App] Microphone access request error/denied:', e)
+      }
+    }
+    initMicPermission()
   }, [])
 
   useEffect(() => {
@@ -223,6 +243,26 @@ export default function App() {
         const spotify        = sessions.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
         const active         = sessions.find(s => s.isPlaying)
         const selected = currentPlaying || spotify || active || current || sessions[0] || INITIAL_MEDIA
+        const validTrack = selected.title && selected.title !== 'No media playing'
+        const isFirstLoad = !prevTitleRef.current
+        const titleChanged = validTrack && selected.title !== prevTitleRef.current
+        const artChanged = selected.albumArt && selected.albumArt !== prevAlbumArtRef.current
+        
+        if (isFirstLoad && validTrack) {
+          prevTitleRef.current = selected.title
+          prevAlbumArtRef.current = selected.albumArt || ''
+        } else if (titleChanged || artChanged) {
+          prevTitleRef.current = selected.title
+          prevAlbumArtRef.current = selected.albumArt || ''
+          if (settings.sneakPeek !== false && selected.isPlaying) {
+            setSneakPeekBanner({
+              title: selected.title,
+              artist: selected.artist || '',
+              albumArt: selected.albumArt || null,
+              source: selected.source || 'Now Playing',
+            })
+          }
+        }
         setMedia(prev => ({ ...selected, volume: prev.volume ?? selected.volume ?? 50 }))
       } else {
         setAllSessions([])
@@ -330,12 +370,16 @@ export default function App() {
       window.electronAPI.mediaCommand('prev', null, media.sourceAppId || media.source)
   }, [media.source, media.sourceAppId])
 
+  const [sneakPeekBanner, setSneakPeekBanner] = useState(null)
+  const prevTitleRef = useRef('')
+  const prevAlbumArtRef = useRef('')
+
   const throttledVolumeIPC = useRef(
     throttleDebounce((level, sourceAppId, source) => {
       if (isElectron && window.electronAPI.mediaCommand) {
         window.electronAPI.mediaCommand('volume', level, sourceAppId || source)
       }
-    }, 150)
+    }, 50)
   ).current
 
   const handleVolumeChange = useCallback((level) => {
@@ -397,8 +441,8 @@ export default function App() {
   useEffect(() => {
     let timeoutId = null
     const handleBlur = (e) => {
-      // Don't auto-dismiss if Control Center is open or docked, to prevent accidental closing on Windows
-      if (settings.docked || controlCenterOpen || clipboardOpen) return
+      // Don't auto-dismiss if Control Center/Sync Bridge is open, docked, or wake active
+      if (settings.docked || controlCenterOpen || clipboardOpen || syncBridgeOpen || wakeActive) return
       timeoutId = setTimeout(() => {
         setControlCenterOpen(false)
         setClipboardOpen(false)
@@ -417,15 +461,34 @@ export default function App() {
       window.removeEventListener('focus', handleFocus)
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [settings.docked, controlCenterOpen, clipboardOpen])
+  }, [settings.docked, controlCenterOpen, clipboardOpen, syncBridgeOpen, wakeActive])
 
   useEffect(() => {
     if (!isElectron) return undefined
     const cleanups = [
       window.electronAPI?.onOpenControlCenter?.(() => setControlCenterOpen(true)),
       window.electronAPI?.onOpenClipboard?.(() => setClipboardOpen(true)),
+      window.electronAPI?.onAgentMsg?.((data) => {
+        if (!data) return
+        if (data.type === 'wake' || data.type === 'voice_query' || data.type === 'thought' || data.type === 'subagent_start') {
+          setControlCenterOpen(true)
+          setWakeActive(true)
+          if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current)
+          wakeTimerRef.current = setTimeout(() => {
+            setWakeActive(false)
+          }, 15000)
+        } else if (data.type === 'done' || data.type === 'error') {
+          if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current)
+          wakeTimerRef.current = setTimeout(() => {
+            setWakeActive(false)
+          }, 8000)
+        }
+      }),
     ].filter(Boolean)
-    return () => cleanups.forEach(cleanup => cleanup())
+    return () => {
+      cleanups.forEach(cleanup => cleanup())
+      if (wakeTimerRef.current) clearTimeout(wakeTimerRef.current)
+    }
   }, [])
 
   // ── Settings route (standalone settings window) ──────────────────────────
@@ -451,13 +514,23 @@ export default function App() {
     )
   }
 
+  const isOverlayOpen = controlCenterOpen || clipboardOpen || syncBridgeOpen || wakeActive
+
+  useEffect(() => {
+    if (isElectron && window.electronAPI?.setControlCenter) {
+      window.electronAPI.setControlCenter(isOverlayOpen)
+    }
+  }, [isOverlayOpen])
+
   return (
     <>
       <NotchBar
         media={media}
         battery={battery}
         settings={settings}
-        isOverlayOpen={controlCenterOpen || clipboardOpen}
+        sneakPeekBanner={sneakPeekBanner}
+        onClearBanner={() => setSneakPeekBanner(null)}
+        isOverlayOpen={isOverlayOpen}
         onPlayPause={handlePlayPause}
         onNext={handleNext}
         onPrev={handlePrev}
@@ -469,9 +542,16 @@ export default function App() {
         }}
         onClipboardOpen={() => setClipboardOpen(true)}
         onControlCenterOpen={() => setControlCenterOpen(true)}
+        onSyncBridgeOpen={() => setSyncBridgeOpen(true)}
       />
       {settings.volumeHUD !== false && <VolumeHUD visible={volumeHUD.visible} level={volumeHUD.level} />}
       <ClipboardDock open={clipboardOpen} onClose={() => setClipboardOpen(false)} />
+      <NotchSyncBridge
+        open={syncBridgeOpen}
+        onClose={() => setSyncBridgeOpen(false)}
+        settings={settings}
+        onSettingsChange={setSettings}
+      />
       <ControlCenter
         open={controlCenterOpen}
         onClose={() => setControlCenterOpen(false)}

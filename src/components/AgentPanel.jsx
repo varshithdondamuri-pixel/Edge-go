@@ -130,6 +130,33 @@ function AgentPipeline({ agents }) {
   )
 }
 
+function PermissionCard({ request, onRespond }) {
+  if (!request) return null
+  return (
+    <div className="ap-result-card permission-card">
+      <div className="ap-card-header">
+        <span className="ap-card-icon">🛡️</span>
+        <span className="ap-card-title">Permission Required</span>
+        <span className="ap-card-badge" style={{ background: 'rgba(245,158,11,0.25)', color: '#fbbf24' }}>
+          {request.risk?.toUpperCase() || 'CONFIRM'}
+        </span>
+      </div>
+      <div className="ap-permission-body">
+        <div className="ap-permission-action">{request.action}</div>
+        {request.details && <div className="ap-permission-details">{request.details}</div>}
+        <div className="ap-permission-actions">
+          <button type="button" className="ap-btn allow" onClick={() => onRespond(request.requestId, true)}>
+            ✓ Allow Action
+          </button>
+          <button type="button" className="ap-btn deny" onClick={() => onRespond(request.requestId, false)}>
+            ✕ Deny
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ── Main Component ─────────────────────────────────────────── */
 export default function AgentPanel({ settings = {} }) {
   const [prompt, setPrompt]             = useState('')
@@ -145,6 +172,8 @@ export default function AgentPanel({ settings = {} }) {
   const [currentIntent, setCurrentIntent] = useState(null)
   const [showLogs, setShowLogs]         = useState(false)
   const [micError, setMicError]         = useState(null)
+  const [pendingPermission, setPendingPermission] = useState(null)
+  const [showMicModal, setShowMicModal] = useState(false)
 
   const endThoughtsRef  = useRef(null)
   const endResponseRef  = useRef(null)
@@ -279,6 +308,15 @@ export default function AgentPanel({ settings = {} }) {
             submitPromptRef.current(voicePromptText)
           }, 800)
           break
+        case 'permission_request':
+          setPendingPermission({
+            requestId: data.requestId,
+            action: data.action,
+            details: data.details,
+            risk: data.risk
+          })
+          setLogs(p => [...p, `🛡️ Permission required for: ${data.action}`])
+          break
         case 'error':
           setStatus('online')
           setLogs(p => [...p, `⚠ Error: ${data.message}`])
@@ -293,11 +331,18 @@ export default function AgentPanel({ settings = {} }) {
     return () => unsub()
   }, [settings.soundEnabled, speak])
 
+  const handlePermissionRespond = (requestId, granted) => {
+    window.electronAPI?.sendAgentPermissionResponse?.(requestId, granted)
+    setLogs(p => [...p, `🛡️ Permission ${granted ? 'GRANTED' : 'DENIED'}`])
+    setPendingPermission(null)
+  }
+
   useEffect(() => { endThoughtsRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [thoughts])
   useEffect(() => { endResponseRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [response])
 
-  const submitPrompt = useCallback((text) => {
-    if (!text.trim() || status === 'thinking') return
+  const submitPrompt = useCallback((overrideText) => {
+    const text = (typeof overrideText === 'string' ? overrideText : prompt).trim()
+    if (!text) return
 
     // Detect current intent for visual feedback
     const pl = text.toLowerCase()
@@ -319,10 +364,10 @@ export default function AgentPanel({ settings = {} }) {
     setFileCreated(null)
     setStatus('thinking')
     setIsListening(false)
-    window.electronAPI.sendAgentPrompt(text)
+    window.electronAPI?.sendAgentPrompt?.(text)
     setPrompt('')
     inputRef.current?.focus()
-  }, [status])
+  }, [prompt])
 
   const submitPromptRef = useRef(submitPrompt)
   useEffect(() => {
@@ -347,7 +392,9 @@ export default function AgentPanel({ settings = {} }) {
 
   /* Quick-action chips */
   const quickActions = [
+    { label: '🚀 Load .exe', prompt: 'load exe program' },
     { label: '🌐 Search web', prompt: 'search the web for ' },
+    { label: '📁 List files', prompt: 'list files in desktop' },
     { label: '🎨 Create HTML', prompt: 'create a landing page for ' },
     { label: '📊 Create slides', prompt: 'create a presentation about ' },
     { label: '📄 Create doc', prompt: 'create a markdown document: ' },
@@ -453,6 +500,11 @@ export default function AgentPanel({ settings = {} }) {
       {/* ── Agent pipeline timeline ── */}
       {subagents.length > 0 && <AgentPipeline agents={subagents} />}
 
+      {/* ── Pending permission request card ── */}
+      {pendingPermission && (
+        <PermissionCard request={pendingPermission} onRespond={handlePermissionRespond} />
+      )}
+
       {/* ── Search result cards ── */}
       {searchResults && (
         <SearchResultCard results={searchResults.results} query={searchResults.query} provider={searchResults.provider} />
@@ -550,6 +602,48 @@ export default function AgentPanel({ settings = {} }) {
           {isThinking ? '…' : '➔'}
         </button>
       </form>
+
+      {/* ── Microphone Permission Modal ── */}
+      {showMicModal && (
+        <div className="ap-mic-modal">
+          <div className="ap-mic-modal-content">
+            <div className="ap-mic-icon">🎤</div>
+            <h4>Microphone Access Required</h4>
+            <p>Notch Agent needs microphone access to listen for the wake word ('Hey Clicky' / 'Hey Notch'). Please grant permission in your system settings.</p>
+            <div className="ap-mic-buttons">
+              <button
+                type="button"
+                className="ap-btn allow"
+                onClick={async () => {
+                  try {
+                    if (navigator.mediaDevices?.getUserMedia) {
+                      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+                      stream.getTracks().forEach(track => track.stop())
+                    }
+                  } catch (e) {
+                    console.warn('[AgentPanel] Mic access prompt error:', e)
+                  }
+                  const res = await window.electronAPI?.requestMicPermission?.()
+                  if (res === 'granted' || res === true) {
+                    setShowMicModal(false)
+                    setWakeEnabled(true)
+                    window.electronAPI?.setWakeWord?.(true)
+                  }
+                }}
+              >
+                Grant Access
+              </button>
+              <button
+                type="button"
+                className="ap-btn deny"
+                onClick={() => setShowMicModal(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

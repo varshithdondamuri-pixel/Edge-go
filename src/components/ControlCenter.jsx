@@ -133,7 +133,7 @@ export default function ControlCenter({
   if (!throttledBrightnessRef.current) {
     throttledBrightnessRef.current = throttleDebounce((val) => {
       applySystemControl('brightness', val, null, { track: false })
-    }, 180)
+    }, 40)
   }
   const throttledBrightnessIPC = throttledBrightnessRef.current
 
@@ -341,6 +341,49 @@ export default function ControlCenter({
             </div>
           </div>
 
+          {/* ── Synced Media Banner ── */}
+          {media && media.title && (
+            <div className="cc-synced-banner" style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 12px',
+              margin: '0 16px 10px',
+              background: 'linear-gradient(135deg, rgba(124, 106, 247, 0.2) 0%, rgba(59, 130, 246, 0.15) 100%)',
+              border: '1px solid rgba(124, 106, 247, 0.3)',
+              borderRadius: '12px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: 6, overflow: 'hidden',
+                  background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                }}>
+                  {media.albumArt
+                    ? <img src={media.albumArt} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <span style={{ fontSize: 13 }}>🎵</span>
+                  }
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#f8fafc', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                    {media.title}
+                  </span>
+                  {media.artist && (
+                    <span style={{ fontSize: 9, color: '#94a3b8', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                      {media.artist}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span style={{
+                fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 8,
+                background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', letterSpacing: '0.5px', textTransform: 'uppercase', flexShrink: 0
+              }}>
+                {media.source || 'SYNCED'}
+              </span>
+            </div>
+          )}
+
           <div className="cc-body" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
             {/* ── Media Sessions ── */}
             {allSessions.length > 0 && (
@@ -440,13 +483,11 @@ export default function ControlCenter({
 
             {/* ── Focus Mode ── */}
             <div className="cc-tile-group cc-focus-group">
-              <div className="cc-focus-label">Focus Mode</div>
+              <div className="cc-focus-label">Focus & Quiet Mode</div>
               <div className="cc-focus-pills">
                 {[
-                  { id: 'off', icon: '🔔', label: 'Off' },
-                  { id: 'work', icon: '💼', label: 'Work' },
-                  { id: 'personal', icon: '🏠', label: 'Personal' },
-                  { id: 'sleep', icon: '🌙', label: 'Sleep' },
+                  { id: 'off', icon: '🔔', label: 'Notifications On' },
+                  { id: 'sleep', icon: '🌙', label: 'Do Not Disturb' },
                 ].map(f => (
                   <button key={f.id} type="button"
                     className={`cc-focus-pill ${focusMode === f.id ? 'active' : ''}`}
@@ -503,13 +544,7 @@ export default function ControlCenter({
               </div>
             </div>
 
-            {/* ── Quick toggles ── */}
-            <div className="cc-quick-grid">
-              <QuickTile id="qt-dnd" icon={dnd ? '🔕' : '🔔'} label="DND" active={dnd} disabled={isPending('dnd')} onClick={toggleDnd} />
-              <QuickTile id="qt-nightlight" icon="🌙" label="Night Light" active={nightLight} disabled={isPending('nightLight')} onClick={toggleNightLight} />
-              <QuickTile id="qt-screenshot" icon="📸" label="Screenshot" active={screenshotActive} onClick={takeScreenshot} />
-              <QuickTile id="qt-clipboard" icon="📋" label="Clipboard" active={false} onClick={() => onOpenClipboard?.()} />
-            </div>
+
 
             {/* ── Battery ── */}
             <div className="cc-battery-status">

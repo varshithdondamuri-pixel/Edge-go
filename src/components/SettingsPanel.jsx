@@ -369,6 +369,9 @@ function ConnectorsTab({ s, set }) {
         <Row label="Control Center">
           <Toggle id="tog-cc" value={s.controlCenterEnabled} onChange={v => set('controlCenterEnabled', v)} />
         </Row>
+        <Row label="Sync Bridge">
+          <Toggle id="tog-syncbridge" value={s.syncBridgeEnabled} onChange={v => set('syncBridgeEnabled', v)} />
+        </Row>
       </Section>
     </>
   )
@@ -506,6 +509,20 @@ function AgentTab({ s, set }) {
                 onChange={v => set('bingApiKey', v)}
               />
             </Row>
+            <Row label="Search Results Limit" hint="Limit max search results per request (default: 10, max: 10)">
+              <TextInput
+                id="input-bing-limit"
+                type="number"
+                min={1}
+                max={10}
+                placeholder="10"
+                value={s.bingMaxResults ?? 10}
+                onChange={v => {
+                  const val = parseInt(v, 10)
+                  set('bingMaxResults', isNaN(val) ? 10 : Math.min(10, Math.max(1, val)))
+                }}
+              />
+            </Row>
           </Section>
         </>
       )}
@@ -640,9 +657,13 @@ function AboutTab({ s, set }) {
     if (!window.electronAPI?.performGitUpdate) return
     setUpdating(true)
     try {
-      await window.electronAPI.performGitUpdate()
+      const res = await window.electronAPI.performGitUpdate()
+      if (res && !res.ok) {
+        setUpdateInfo(prev => ({ ...prev, message: 'Update error: ' + (res.error || 'Git pull failed') }))
+      }
     } catch (e) {
       setUpdateInfo(prev => ({ ...prev, message: 'Update error: ' + e.message }))
+    } finally {
       setUpdating(false)
     }
   }

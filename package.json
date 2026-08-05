@@ -1,7 +1,7 @@
 {
   "name": "edge-go",
-  "version": "2.1.0",
-  "description": "Edge Go — a sleek always-on-top floating HUD bar for Windows",
+  "version": "2.2.0",
+  "description": "Edge Go Next — a sleek always-on-top floating HUD bar with AI Agent & System Sync Bridge",
   "main": "electron/main.js",
   "homepage": "./",
   "scripts": {
@@ -15,8 +15,8 @@
   },
   "build": {
     "appId": "com.edgego.app",
-    "productName": "Edge Go",
-    "executableName": "EdgeGo",
+    "productName": "Edge Go Next",
+    "executableName": "EdgeGoNext",
     "win": {
       "target": [
         {
@@ -33,18 +33,19 @@
         }
       ],
       "icon": "public/icon.png",
-      "executableName": "EdgeGo"
+      "executableName": "EdgeGoNext"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Edge Go",
-      "uninstallDisplayName": "Edge Go",
+      "shortcutName": "Edge Go Next",
+      "uninstallDisplayName": "Edge Go Next",
       "license": "EULA.txt",
       "runAfterFinish": true,
-      "artifactName": "Edge-Go-Setup-${version}.exe"
+      "deleteAppDataOnUninstall": true,
+      "artifactName": "Edge-Go-Next-Setup-${version}.exe"
     },
     "files": [
       "dist/**/*",

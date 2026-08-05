@@ -1,20 +1,29 @@
-# Edge Go v2.1.0 Release Notes
+# Edge Go v2.2.0 Release Notes
 
-Welcome to **Edge Go v2.1.0**! This major release delivers Microsoft Bing Web Search API v7 integration, Windows `.exe` packaged execution auto-discovery, UTF-8 stream stability guards, and interactive daemon connection management.
+Welcome to **Edge Go v2.2.0**! This major release delivers rate-limited Bing API search (capped to 10 requests), Vosk offline speech recognition support, non-blocking Sneak Peek media banners, Control Center UI cleanup, and offline local TF-IDF document search.
 
 ---
 
-## 🚀 Major Highlights in v2.1.0
+## 🚀 Major Highlights in v2.2.0
 
-### 1. Microsoft Bing Web Search API v7
-- **Official Bing API v7 Integration**: Direct support for Microsoft Bing Web Search API v7 (`https://api.bing.microsoft.com/v7.0/search`) with `Ocp-Apim-Subscription-Key`.
-- **Dynamic Key Sync**: Configure Bing API Key in the Settings panel; updates automatically sync to the running agent daemon.
-- **Resilient Fallbacks**: Automatic fallback to DuckDuckGo/Bing web search if an API key is omitted or unavailable so web search always works smoothly.
+### 1. Bing API Search Capping & Settings Control
+- **10 Request Search Limit**: Direct support for Microsoft Bing Web Search API v7 with configurable search limits (default 10, max 10 requests).
+- **Settings Integration**: Added Search Results Limit control in the Settings panel under Web Search & Bing API.
+- **Offline Fallbacks**: Graceful fallback to DuckDuckGo and local documentation search when offline or when API limits are reached.
 
-### 2. `.EXE` Packaged Build Auto-Discovery & Crash Prevention
-- **Windows Python Candidate Resolver**: Scans `%LOCALAPPDATA%`, `C:\Program Files`, and system drives to discover Python executables even if not present in system `PATH`.
-- **UTF-8 Output Guard**: Forces `PYTHONIOENCODING=utf-8` and safe stdout/stderr stream reconfiguration to prevent `UnicodeEncodeError` crashes on Windows when logging Unicode & emojis.
-- **Manual Reconnect Control**: Added an interactive **Reconnect** button in the HUD header to instantly recover daemon status if offline.
+### 2. Vosk Offline STT Engine & Resilient Voice Listener
+- **Vosk Offline Speech Recognition**: Added support for `vosk` (`recognize_vosk`) for 100% local, offline voice recognition without cloud dependencies.
+- **Reliable Prompt Execution**: Enforced `try...finally` state cleanup in Python daemon (`agent_daemon.py`) so `agent_busy` and `status: idle` are guaranteed to reset.
+
+### 3. Non-Blocking Media Banner & Control Center Sync
+- **Non-Blocking Inset Banner**: Configured `.notch-sneak-banner` with `pointerEvents: 'none'` so active song notifications never block user clicks or freeze player controls.
+- **Synced Control Center Banner**: Added a synced Now Playing media banner directly inside the Control Center panel.
+- **Control Center Row Cleanup**: Removed redundant quick tile overflow for a clean, responsive layout.
+
+### 4. Notch Universal System Sync Bridge & Cross-System Import/Export
+- **🔗 Sync Bridge Controller**: Direct Notch connector button in NotchBar header for real-time control over themes, system rules, media sources, and permissions.
+- **✓ Okay Confirmation Authorization**: Interactive "Confirm System Change? (Okay / Cancel)" dialog before applying any system tweak or profile import.
+- **Cross-System Syncing**: 1-click `Export Profile JSON` and `Import System Profile` to easily mirror configurations across multiple machines.
 
 ---
 

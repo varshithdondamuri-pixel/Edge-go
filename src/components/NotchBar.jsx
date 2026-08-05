@@ -34,20 +34,35 @@ function SourceConnector({ source }) {
 
 export default function NotchBar({
   media, battery, settings = {}, isOverlayOpen,
+  sneakPeekBanner, onClearBanner,
   onPlayPause, onNext, onPrev,
   onVolumeChange, onSeek,
   onSettingsOpen,
   onClipboardOpen,
   onControlCenterOpen,
+  onSyncBridgeOpen,
 }) {
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const [activeBanner, setActiveBanner] = useState(null)
   const collapseTimer = useRef(null)
   const expandTimer = useRef(null)
+  const bannerTimer = useRef(null)
   const hoveringRef = useRef(false)
   const wasOverlayOpenRef = useRef(false)
   const safeMedia = media || {}
   const miniTitle = safeMedia.title || 'No media playing'
+
+  useEffect(() => {
+    if (sneakPeekBanner) {
+      setActiveBanner(sneakPeekBanner)
+      if (bannerTimer.current) clearTimeout(bannerTimer.current)
+      bannerTimer.current = setTimeout(() => {
+        setActiveBanner(null)
+        onClearBanner?.()
+      }, 3500)
+    }
+  }, [sneakPeekBanner, onClearBanner])
 
   const isOverlayOpenRef = useRef(isOverlayOpen)
   isOverlayOpenRef.current = isOverlayOpen
@@ -69,7 +84,6 @@ export default function NotchBar({
   const expandNotch = useCallback(() => {
     setExpanded(true)
     if (isElectron) {
-      // Tiny delay so the CSS spring starts before native window resize
       setTimeout(() => {
         window.electronAPI.expandWindow('expanded', {
           expandedWidth: settings.expandedWidth,
@@ -80,9 +94,11 @@ export default function NotchBar({
   }, [settings.collapsedWidth, settings.expandedWidth])
 
   const collapseNotch = useCallback(() => {
+    if (isOverlayOpenRef.current || hoveringRef.current) return
     setExpanded(false)
     if (isElectron) {
       setTimeout(() => {
+        if (isOverlayOpenRef.current || hoveringRef.current) return
         window.electronAPI.expandWindow('merged', {
           collapsedWidth: settings.collapsedWidth,
         })
@@ -94,7 +110,6 @@ export default function NotchBar({
     hoveringRef.current = true
     setHovered(true)
     
-    // Fix flickering by clearing any pending collapse timer immediately upon re-entry
     if (collapseTimer.current) {
       clearTimeout(collapseTimer.current)
       collapseTimer.current = null
@@ -109,8 +124,8 @@ export default function NotchBar({
     }
 
     if (expandTimer.current) clearTimeout(expandTimer.current)
-    // Expand to full view after 160ms hover (snappy but not accidental)
-    expandTimer.current = setTimeout(expandNotch, 160)
+    // Fast 80ms hover expansion for smooth responsiveness
+    expandTimer.current = setTimeout(expandNotch, 80)
   }, [expanded, expandNotch, settings.collapsedWidth])
 
   const handleMouseLeave = useCallback(() => {
@@ -139,6 +154,14 @@ export default function NotchBar({
     if (isOverlayOpen) {
       wasOverlayOpenRef.current = true
       setExpanded(true)
+      if (collapseTimer.current) {
+        clearTimeout(collapseTimer.current)
+        collapseTimer.current = null
+      }
+      if (expandTimer.current) {
+        clearTimeout(expandTimer.current)
+        expandTimer.current = null
+      }
       if (isElectron) {
         window.electronAPI.expandWindow('expanded', {
           expandedWidth: settings.expandedWidth,
@@ -183,6 +206,54 @@ export default function NotchBar({
         >
           {/* Drag region */}
           <div className="notch-drag" />
+
+          {/* ── SNEAK PEEK BANNER ── */}
+          {activeBanner && (
+            <div className="notch-sneak-banner" style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 2,
+              pointerEvents: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 16px',
+              background: 'rgba(15, 23, 42, 0.88)',
+              backdropFilter: 'blur(16px)',
+              borderRadius: 'inherit',
+              animation: 'bannerSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.35)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: 6, overflow: 'hidden',
+                  background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                }}>
+                  {activeBanner.albumArt
+                    ? <img src={activeBanner.albumArt} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <span style={{ fontSize: 14 }}>🎵</span>
+                  }
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#f8fafc', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                    {activeBanner.title}
+                  </span>
+                  {activeBanner.artist && (
+                    <span style={{ fontSize: 10, color: '#94a3b8', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                      {activeBanner.artist}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span style={{
+                fontSize: 9, fontWeight: 700, padding: '3px 7px', borderRadius: 10,
+                background: 'rgba(124, 106, 247, 0.25)', color: '#a78bfa', letterSpacing: '0.5px', textTransform: 'uppercase', flexShrink: 0
+              }}>
+                {activeBanner.source || 'NOW PLAYING'}
+              </span>
+            </div>
+          )}
 
           {/* ── COLLAPSED VIEW ── */}
           <div className="notch-collapsed-view" aria-hidden={expanded}>
@@ -258,6 +329,22 @@ export default function NotchBar({
                       title="Clipboard"
                     >
                       <ClipIcon />
+                    </button>
+                  )}
+                  {/* Sync Bridge button */}
+                  {settings.syncBridgeEnabled !== false && (
+                    <button
+                      id="btn-sync-bridge"
+                      className="connector-btn"
+                      onClick={() => {
+                        isOverlayOpenRef.current = true
+                        onSyncBridgeOpen?.()
+                      }}
+                      aria-label="Open Sync Bridge"
+                      title="Notch Sync Bridge"
+                      style={{ fontSize: '12px' }}
+                    >
+                      🔗
                     </button>
                   )}
                   <button

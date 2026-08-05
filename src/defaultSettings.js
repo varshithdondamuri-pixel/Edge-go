@@ -47,6 +47,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   calendarConnector: true,
   clipboardEnabled: true,
   controlCenterEnabled: true,
+  syncBridgeEnabled: true,
   betaModeEnabled: false,
   soundEnabled: false,
   docked: false,
@@ -58,6 +59,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   agentPermissionsEnabled: true,
   agentIntegrationsEnabled: true,
   bingApiKey: '',
+  bingMaxResults: 10,
   voiceProfile: 'Default',
   microphoneSource: 'System Default',
 

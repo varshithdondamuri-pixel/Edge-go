@@ -2,6 +2,20 @@
 
 All notable changes to Edge Go are documented here.
 
+## [2.2.0] - 2026-07-31
+
+### Added
+- **Notch Universal System Sync Bridge**: Integrated direct `NotchSyncBridge` modal and header connector button (`🔗`) for live control over themes, rules, media sources, and agent settings.
+- **Interactive "Okay" Confirmation Authorization**: Prompt dialog before applying system modifications or profile imports.
+- **Cross-System Profile Export & Import**: 1-click `Export Profile JSON` and `Import System Profile` for cross-machine synchronization.
+- **Executable `.exe` Loader & File Picker**: Integrated native Windows File Explorer picker and `launch_exe` agent intent for launching `.exe`, `.cmd`, `.bat`, and `.lnk` files.
+- **Sneak Peek Track Change Banner**: Sliding glass overlay inside NotchBar notifying song title, artist, and media source on track changes.
+
+### Fixed
+- **Windows Media Controls**: Added global Windows `keybd_event` (VK_MEDIA_PLAY_PAUSE) fallback so Play/Pause works across Spotify, Windows Media, and browsers.
+- **Voice Wake Microphone Stream**: Fixed audio capture stream lifecycle and added `dynamic_energy_threshold = True` for instant "Hey Clicky" response.
+- **Zero-Config Web Search**: Added DuckDuckGo & Wikipedia API fallbacks so search works out-of-the-box without requiring a Bing key.
+
 ## [2.1.0] - 2026-07-29
 
 ### Added
