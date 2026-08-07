@@ -722,6 +722,8 @@ foreach ($item in $items) {
     console.error('get-wifi-networks error:', e.message)
     return []
   }
+}
+
 let cachedBluetoothDevs = null
 let lastBtFetchTime = 0
 
