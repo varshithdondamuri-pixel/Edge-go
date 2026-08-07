@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import AgentPanel from './AgentPanel'
 import MusicPlayer from './MusicPlayer.jsx'
 
 // Leading-and-trailing throttle-debounce helper
@@ -60,6 +59,9 @@ export default function ControlCenter({
   const [wifiNetworks, setWifiNetworks] = useState(FALLBACK_WIFI_NETWORKS)
   const [connectedNetwork, setConnectedNetwork] = useState(FALLBACK_WIFI_NETWORKS[0])
   const [wifiError, setWifiError] = useState(null)
+  const [bluetoothDevices, setBluetoothDevices] = useState([])
+  const [showBtDevices, setShowBtDevices] = useState(false)
+  const [connectedBtDev, setConnectedBtDev] = useState(null)
   const [focusMode, setFocusMode] = useState('off')
   const [pendingControls, setPendingControls] = useState({})
   const [connectingNetworkId, setConnectingNetworkId] = useState(null)
@@ -160,7 +162,17 @@ export default function ControlCenter({
           const networks = await window.electronAPI.getWifiNetworks()
           if (Array.isArray(networks) && networks.length > 0) {
             setWifiNetworks(networks)
-            setConnectedNetwork(networks.find(net => net.connected) || networks[0])
+            const conn = networks.find(net => net.connected) || networks[0]
+            setConnectedNetwork(conn)
+          }
+        } catch {}
+      }
+      if (window.electronAPI?.getBluetoothDevices) {
+        try {
+          const devs = await window.electronAPI.getBluetoothDevices()
+          if (Array.isArray(devs)) {
+            setBluetoothDevices(devs)
+            setConnectedBtDev(devs.find(d => d.connected) || null)
           }
         } catch {}
       }
@@ -439,14 +451,27 @@ export default function ControlCenter({
                 )}
               </div>
 
-              <button type="button" id="cc-bluetooth" className={`cc-tile cc-tile-half ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}
-                onClick={toggleBluetooth} disabled={isPending('bluetooth') || isPending('airplaneMode')} aria-pressed={bluetooth}>
-                <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
-                <div className="cc-tile-info">
-                  <div className="cc-tile-name">Bluetooth</div>
-                  <div className="cc-tile-sub">{bluetooth ? 'On' : 'Off'}</div>
-                </div>
-              </button>
+              <div className={`cc-tile cc-tile-bluetooth ${bluetooth ? 'active' : ''} ${isPending('bluetooth') ? 'pending' : ''}`}>
+                <button type="button" id="cc-bluetooth-toggle" className="cc-tile-inner" onClick={toggleBluetooth} disabled={isPending('bluetooth') || isPending('airplaneMode')} aria-pressed={bluetooth}>
+                  <div className="cc-tile-icon"><BluetoothIcon active={bluetooth} /></div>
+                  <div className="cc-tile-info">
+                    <div className="cc-tile-name">Bluetooth</div>
+                    <div className="cc-tile-sub">
+                      {bluetooth
+                        ? (connectedBtDev ? connectedBtDev.name : (bluetoothDevices.length > 0 ? `${bluetoothDevices.length} Devices` : 'On'))
+                        : 'Off'
+                      }
+                    </div>
+                  </div>
+                </button>
+                {bluetooth && (
+                  <button type="button" id="cc-bluetooth-expand" className="cc-tile-expand"
+                    onClick={(e) => { e.stopPropagation(); setShowBtDevices(v => !v) }}
+                    disabled={isPending('bluetooth') || isPending('airplaneMode')} aria-label="Show Bluetooth devices">
+                    <ChevronIcon />
+                  </button>
+                )}
+              </div>
 
               <button type="button" id="cc-airplane" className={`cc-tile cc-tile-half ${airplaneMode ? 'active cc-tile-warning' : ''} ${isPending('airplaneMode') ? 'pending' : ''}`}
                 onClick={toggleAirplaneMode} disabled={isPending('airplaneMode') || isPending('wifi') || isPending('bluetooth')} aria-pressed={airplaneMode}>
@@ -457,6 +482,24 @@ export default function ControlCenter({
                 </div>
               </button>
             </div>
+
+            {/* Bluetooth device list */}
+            {bluetooth && showBtDevices && (
+              <div className="cc-network-list" role="listbox">
+                <div className="cc-network-list-title">Bluetooth Devices</div>
+                {bluetoothDevices.length === 0 ? (
+                  <div className="cc-network-error" style={{ background: 'transparent', color: '#94a3b8' }}>No devices found</div>
+                ) : (
+                  bluetoothDevices.map(dev => (
+                    <div key={dev.id} className={`cc-network-item ${dev.connected ? 'connected' : ''}`}>
+                      <span style={{ fontSize: '12px' }}>🎧</span>
+                      <span className="cc-net-name" style={{ flex: 1, marginLeft: '6px' }}>{dev.name}</span>
+                      {dev.connected ? <span className="cc-net-check">Connected</span> : <span className="cc-net-saved">Paired</span>}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
 
             {/* Wi-Fi network list */}
             {wifi && showNetworks && (
@@ -500,7 +543,6 @@ export default function ControlCenter({
               </div>
             </div>
 
-            {/* ── Beta Agent Panel ── */}
             {/* ── Music Player ── */}
             {media && (media.title || media.isPlaying) && (
               <div className="cc-music-player-wrap" style={{ margin: '4px 0 10px', width: '100%' }}>
@@ -515,12 +557,6 @@ export default function ControlCenter({
                 />
               </div>
             )}
-
-            {/* ── Beta Agent Panel ── */}
-            <BetaAgentPanel
-              settings={settings}
-              onSettingsChange={onSettingsChange}
-            />
 
             {/* ── Sliders ── */}
             <div className="cc-sliders">
@@ -572,72 +608,6 @@ export default function ControlCenter({
         </div>
       </div>
     </>
-  )
-}
-
-// ─── Beta Agent Panel ─────────────────────────────────────────────────────────
-
-function BetaAgentPanel({ settings = {}, onSettingsChange }) {
-  const enabled = settings.betaModeEnabled
-
-  return (
-    <div className="cc-beta-card">
-      {/* Header */}
-      <div className="cc-beta-card-header" style={{ borderBottom: enabled ? '1px solid rgba(124, 106, 247, 0.12)' : 'none', paddingBottom: enabled ? '10px' : '0' }}>
-        <div className="cc-beta-card-title-wrap">
-          <span className="cc-beta-card-icon">⚡</span>
-          <span className="cc-beta-card-title">Beta Agent</span>
-        </div>
-        <div className="cc-beta-card-status">
-          <span className={`cc-beta-card-dot ${enabled ? 'active' : 'inactive'}`} />
-          <span className="cc-beta-card-text" style={{ color: enabled ? '#4ade80' : 'var(--color-text-muted)', fontSize: '10px' }}>
-            {enabled ? 'Voice Active' : 'Text Only'}
-          </span>
-          <div
-            className={`cc-beta-card-toggle ${enabled ? 'on' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation()
-              onSettingsChange?.(prev => {
-                const nextVal = !prev.betaModeEnabled
-                return { ...prev, betaModeEnabled: nextVal, soundEnabled: nextVal ? true : prev.soundEnabled }
-              })
-            }}
-            role="switch"
-            aria-checked={enabled}
-            tabIndex={0}
-            style={{
-              width: '28px',
-              height: '16px',
-              borderRadius: '8px',
-              background: enabled ? 'var(--color-accent)' : 'rgba(255,255,255,0.08)',
-              border: `1px solid ${enabled ? 'var(--color-accent)' : 'rgba(255,255,255,0.12)'}`,
-              position: 'relative',
-              cursor: 'pointer',
-              marginLeft: '6px'
-            }}
-          >
-            <div style={{
-              position: 'absolute',
-              top: '1px',
-              left: '1px',
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              background: '#fff',
-              transform: enabled ? 'translateX(12px)' : 'none',
-              transition: 'transform 0.2s ease-in-out'
-            }} />
-          </div>
-        </div>
-      </div>
-
-      {/* ── AI Agent Panel ── */}
-      {enabled && (
-        <div className="beta-agent-wrapper" style={{ padding: '4px 0 0' }}>
-          <AgentPanel settings={settings} />
-        </div>
-      )}
-    </div>
   )
 }
 

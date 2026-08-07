@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSystemUsage: () => ipcRenderer.invoke('get-system-usage'),
   getSystemVolume: () => ipcRenderer.invoke('get-system-volume'),
   getWifiNetworks: () => ipcRenderer.invoke('get-wifi-networks'),
+  getBluetoothDevices: () => ipcRenderer.invoke('get-bluetooth-devices'),
   connectWifiNetwork: (ssid) => ipcRenderer.invoke('connect-wifi-network', ssid),
   mediaCommand: (cmd, value, source) => ipcRenderer.send('media-command', cmd, value, source),
   readClipboard: () => ipcRenderer.invoke('read-clipboard'),

@@ -1,22 +1,19 @@
-# Edge Go v2.2.0 Release Notes
+# Edge Go v2.3.0 (Raw Edition) Release Notes
 
-Welcome to **Edge Go v2.2.0**! This release delivers the streamlined Notch HUD floating bar, Universal System Sync Controller, non-blocking Sneak Peek media banners, and Control Center UI enhancements.
+Welcome to **Edge Go v2.3.0 Raw Edition**! This release delivers a pure, ultra-responsive dynamic notch bar floating HUD with zero-latency system slider controls, live scanned Wi-Fi networks, real Bluetooth devices discovery, and instant play/pause media synchronization.
 
 ---
 
-## 🚀 Major Highlights in v2.2.0
+## 🚀 Major Highlights in v2.3.0
 
-### 1. Notch Universal System Sync Bridge & Profile Control
-- **🔗 Sync Controller**: Direct Notch connector button in the NotchBar header for real-time control over system themes, rules, and media sources.
-- **✓ Interactive "Okay" Authorization**: Prompt confirmation dialog before applying system tweaks or loading profile settings.
-- **Cross-System Profile Import & Export**: 1-click `Export Profile JSON` and `Import System Profile` to easily save and mirror configurations across machines (`notch-profile.json`).
+### 1. ⚡ Raw Edition HUD (Clean & Agent-Free)
+- **Pure Dynamic Notch**: Removed background agent panel clutter to deliver a lightweight, raw, high-performance system HUD bar.
+- **Butter-Smooth UI Response**: Synchronous state updates on volume and brightness slider dragging for fluid 60fps animations.
 
-### 2. Media Banners & Control Center Sync
-- **Non-Blocking Sneak Peek Banner**: Inset song notifications configured with pass-through interaction (`pointerEvents: 'none'`) so active banners never block clicks or freeze player controls.
-- **Synced Control Center Media Banner**: Live Now Playing banner integrated right inside the Control Center header.
-- **Media Controls & SMTC Fallbacks**: Unified media playback controls across Spotify, Windows Media, and system browsers.
+### 2. 📶 Real Wi-Fi Networks & 🎧 Bluetooth Device Discovery
+- **Live Scanned Wi-Fi Networks**: Displays all nearby real Wi-Fi network SSIDs, signal strengths, and security statuses instead of hardcoded fallbacks.
+- **Paired & Connected Bluetooth Devices**: Interactive Bluetooth tile displaying active connected device names and expandable paired devices list.
 
-### 3. Clean Control Center Layout & System Toggles
-- **Streamlined Control Center**: Removed redundant tile clutter for a clean, fast-loading interface.
-- **Quiet & Focus Mode Controls**: Quick toggles for Notifications On / Do Not Disturb quiet mode.
-- **Executable `.exe` Launcher**: Integrated Windows File Explorer launcher to open `.exe`, `.cmd`, `.bat`, or `.lnk` programs directly from the Sync Controller.
+### 3. 🎵 Zero-Delay Media & Synced Banners
+- **Instant Play/Pause & Volume Controls**: Immediate IPC transport for play/pause toggles and volume adjustments.
+- **Synced Now Playing Banners**: Live track titles, artists, album art, and sources in sync across the Notch bar and Control Center.

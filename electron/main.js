@@ -722,6 +722,80 @@ foreach ($item in $items) {
     console.error('get-wifi-networks error:', e.message)
     return []
   }
+let cachedBluetoothDevs = null
+let lastBtFetchTime = 0
+
+async function getBluetoothDevices() {
+  const now = Date.now()
+  if (cachedBluetoothDevs && now - lastBtFetchTime < 10000) {
+    return cachedBluetoothDevs
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const out = await runPowerShell(`
+$ErrorActionPreference = 'SilentlyContinue'
+$devs = Get-CimInstance Win32_PNPEntity | Where-Object { $_.PNPClass -eq 'Bluetooth' -or $_.Service -eq 'BthLEEnum' -or $_.Service -eq 'BthEnum' } | Select-Object -First 10
+$items = @()
+foreach ($d in $devs) {
+  if ($d.Name -and $d.Name -notmatch 'Adapter|Enumerator|Controller|Radio|Device Identifier|Generic') {
+    $items += [PSCustomObject]@{
+      id = $d.DeviceID
+      name = $d.Name
+      connected = ($d.Status -eq 'OK')
+    }
+  }
+}
+@($items) | ConvertTo-Json -Compress
+`)
+      const parsed = out.trim() ? JSON.parse(out.trim()) : []
+      const list = Array.isArray(parsed) ? parsed : (parsed && parsed.name ? [parsed] : [])
+      cachedBluetoothDevs = list.map((d, idx) => ({
+        id: d.id || `bt-${idx}`,
+        name: String(d.name || 'Bluetooth Device'),
+        connected: !!d.connected,
+      }))
+      lastBtFetchTime = now
+      return cachedBluetoothDevs
+    } catch (e) {
+      console.error('get-bluetooth-devices error:', e.message)
+      return []
+    }
+  } else if (process.platform === 'darwin') {
+    return new Promise((resolve) => {
+      const swiftScript = `
+import Foundation
+import IOBluetooth
+
+var items: [[String: Any]] = []
+if let devices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] {
+  for d in devices {
+    let name = d.nameOrAddress ?? "Bluetooth Device"
+    items.append([
+      "id": d.addressString ?? name,
+      "name": name,
+      "connected": d.isConnected()
+    ])
+  }
+}
+if let data = try? JSONSerialization.data(withJSONObject: items), let json = String(data: data, encoding: .utf8) {
+  print(json)
+} else {
+  print("[]")
+}
+`
+      exec(`swift -e '${swiftScript.replace(/'/g, "'\\''")}'`, { timeout: 3000 }, (err, stdout) => {
+        if (err || !stdout || !stdout.trim()) return resolve([])
+        try {
+          const list = JSON.parse(stdout.trim())
+          cachedBluetoothDevs = list
+          lastBtFetchTime = now
+          resolve(list)
+        } catch { resolve([]) }
+      })
+    })
+  }
+  return []
 }
 
 async function connectWindowsWifiNetwork(ssid) {
@@ -892,6 +966,8 @@ if (-not $setOk) { throw '${radioKind} radio not found or not controllable' }
 ipcMain.handle('get-system-state', async () => getWindowsSystemState())
 
 ipcMain.handle('get-wifi-networks', async () => getWindowsWifiNetworks())
+
+ipcMain.handle('get-bluetooth-devices', async () => getBluetoothDevices())
 
 ipcMain.handle('connect-wifi-network', async (_, ssid) => connectWindowsWifiNetwork(ssid))
 
