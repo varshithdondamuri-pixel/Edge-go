@@ -2,6 +2,31 @@
 
 All notable changes to Edge Go are documented here.
 
+## [3.0.0] - 2026-09-06
+
+Base Edition — the base HUD runs on its own, with system controls actually wired to the system. No UI or layout changes.
+
+### Changed
+- **Base build no longer includes the AI agent**: the Python agent daemon started unless Beta mode was explicitly disabled, so a clean install spawned Python on every launch. It now starts only when Beta mode is on.
+- **Agent pointer overlay is Beta-only**: the full-screen overlay window was created at every startup; it is now created and destroyed together with Beta mode.
+- **No microphone prompt in the base build**: the renderer requested microphone access unconditionally; it now waits for Beta mode.
+- **Brightness writes are coalesced**: one PowerShell/WMI process per slider value (~40 ms apart) is replaced by a single in-flight call that always applies the newest value; renderer throttle raised to 90 ms.
+- **Visualizer bars animate via transform** instead of `height`, removing a per-frame layout pass inside the notch's blurred surface.
+- **Clock ticks on the minute** rather than every second, since only minutes are displayed.
+
+### Fixed
+- **macOS startup crash**: `systemPreferences` was used without being imported, so the reference threw inside `app.whenReady()` and the window, tray and global shortcuts were never created. The mic-permission IPC handlers failed on every platform for the same reason.
+- **Agent daemon could not load**: the body of `process_prompt()` sat outside its own `try`, raising `SyntaxError: expected 'except' or 'finally' block` on import.
+- **Volume slider toggled playback on macOS**: `volume` and `seek` fell through into the play/pause mapping. Both are now handled as real system calls, and system volume is read back from the OS instead of a stale constant.
+- **Album art was blocked everywhere**: the content-security policy defined no `img-src`, so it fell back to `default-src 'self'` and blocked both the media daemon's `data:` artwork and the online `https:` fallback. Covers now render in the notch, banners, Control Center and player.
+- **Sneak-peek banner never dismissed**: its 3.5 s timer restarted on every parent render while the position clock ticked.
+- **Media pipeline could hang**: the artwork lookup used `https.get`'s `timeout` option without handling the event, so a stalled request never resolved — `get-media-info` waited forever and each poll opened another socket. macOS `osascript` media getters had no timeout for the same reason.
+- **Stacked media daemons**: every failed daemon write could spawn another Windows SMTC PowerShell poller; only one runs now, and its handle is cleared on exit.
+- **Duplicate window resizes**: two effects sent conflicting `set-control-center` values in the same render, resizing and refocusing the window twice per overlay toggle.
+- **React hook-order violation**: a `useEffect` was declared after an early return in the app root.
+- **Redundant re-renders**: media polling replaced state every 2 s even when the track was unchanged.
+- **Sync Bridge could not be closed with Escape**, which risked stranding the window at full-screen size.
+
 ## [2.2.0] - 2026-07-31
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "name": "edge-go",
-  "version": "2.3.0",
-  "description": "Edge Go Raw — sleek floating dynamic notch HUD with zero-latency system controls",
+  "version": "3.0.0",
+  "description": "Edge Go Base — sleek floating dynamic notch HUD with real system volume, brightness and media controls",
   "main": "electron/main.js",
   "homepage": "./",
   "scripts": {
