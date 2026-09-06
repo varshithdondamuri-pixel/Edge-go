@@ -131,11 +131,15 @@ export default function ControlCenter({
     finally { if (track) setControlPending(control, false) }
   }, [setControlPending])
 
+  // Each brightness write is a real OS call (WMI on Windows) costing a few
+  // hundred ms. 40ms throttling queued far more work than the machine could
+  // retire while dragging; 90ms still feels immediate and the main process
+  // coalesces whatever else piles up.
   const throttledBrightnessRef = useRef(null)
   if (!throttledBrightnessRef.current) {
     throttledBrightnessRef.current = throttleDebounce((val) => {
       applySystemControl('brightness', val, null, { track: false })
-    }, 40)
+    }, 90)
   }
   const throttledBrightnessIPC = throttledBrightnessRef.current
 

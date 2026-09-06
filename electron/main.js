@@ -14,12 +14,13 @@ const {
   nativeImage,
   globalShortcut,
   clipboard,
+  systemPreferences,
 } = require('electron')
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
 const dns = require('dns')
-const { exec, spawn } = require('child_process')
+const { exec, execFile, spawn } = require('child_process')
 
 const isDev = !app.isPackaged
 
@@ -973,7 +974,36 @@ ipcMain.handle('get-bluetooth-devices', async () => getBluetoothDevices())
 
 ipcMain.handle('connect-wifi-network', async (_, ssid) => connectWindowsWifiNetwork(ssid))
 
-ipcMain.handle('set-system-control', async (_, control, value) => setSystemControl(control, value))
+// Brightness arrives as a stream of slider values. Each raw call spawns a
+// PowerShell/WMI process that takes a few hundred ms, so firing one per value
+// buries the machine and lands out of order. Keep a single call in flight and
+// collapse everything that arrives meanwhile down to the newest value.
+let brightnessInFlight = false
+let brightnessPending = null
+
+async function setBrightnessCoalesced(value) {
+  if (brightnessInFlight) {
+    brightnessPending = value
+    return { ok: true, coalesced: true, state: { ...systemControlState } }
+  }
+  brightnessInFlight = true
+  try {
+    let result = await setSystemControl('brightness', value)
+    while (brightnessPending !== null) {
+      const next = brightnessPending
+      brightnessPending = null
+      result = await setSystemControl('brightness', next)
+    }
+    return result
+  } finally {
+    brightnessInFlight = false
+  }
+}
+
+ipcMain.handle('set-system-control', async (_, control, value) => {
+  if (control === 'brightness') return setBrightnessCoalesced(value)
+  return setSystemControl(control, value)
+})
 
 // ─── macOS Media Getters ───────────────────────────────────────────────────
 
@@ -1020,7 +1050,7 @@ function getMacSpotifyInfo() {
         return ""
       end if
     `
-    exec(`osascript -e '${script}'`, (err, stdout) => {
+    execFile('osascript', ['-e', script], { timeout: 4000 }, (err, stdout) => {
       if (err || !stdout || !stdout.trim()) {
         resolve(null)
       } else {
@@ -1052,7 +1082,7 @@ function getMacMusicInfo() {
         return ""
       end if
     `
-    exec(`osascript -e '${script}'`, (err, stdout) => {
+    execFile('osascript', ['-e', script], { timeout: 4000 }, (err, stdout) => {
       if (err || !stdout || !stdout.trim()) {
         resolve(null)
       } else {
@@ -1079,7 +1109,22 @@ async function fetchAlbumArtFallback(artist, title) {
     const query = encodeURIComponent(`${artist} ${title}`)
     const https = require('https')
     return new Promise((resolve) => {
-      https.get(`https://itunes.apple.com/search?term=${query}&entity=song&limit=1`, { timeout: 3000 }, (res) => {
+      let settled = false
+      // Resolve exactly once. Without this a stalled request left the media
+      // pipeline awaiting forever: get-media-info never returned, the renderer's
+      // in-flight guard stuck, and every poll opened another socket.
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        if (albumArtSearchCache.size > 200) albumArtSearchCache.clear()
+        albumArtSearchCache.set(key, value)
+        resolve(value)
+      }
+      const req = https.get(`https://itunes.apple.com/search?term=${query}&entity=song&limit=1`, { timeout: 3000 }, (res) => {
+        if (res.statusCode !== 200) {
+          res.resume()
+          return finish(null)
+        }
         let raw = ''
         res.on('data', chunk => { raw += chunk })
         res.on('end', () => {
@@ -1090,18 +1135,19 @@ async function fetchAlbumArtFallback(artist, title) {
               const rawUrl = item.artworkUrl100 || item.artworkUrl60 || null
               if (rawUrl) {
                 const hiresUrl = rawUrl.replace('100x100bb.jpg', '400x400bb.jpg').replace('60x60bb.jpg', '400x400bb.jpg')
-                albumArtSearchCache.set(key, hiresUrl)
-                return resolve(hiresUrl)
+                return finish(hiresUrl)
               }
             }
           } catch {}
-          albumArtSearchCache.set(key, null)
-          resolve(null)
+          finish(null)
         })
-      }).on('error', () => {
-        albumArtSearchCache.set(key, null)
-        resolve(null)
       })
+      // `timeout` only emits an event — the socket has to be torn down by hand.
+      req.on('timeout', () => {
+        req.destroy()
+        finish(null)
+      })
+      req.on('error', () => finish(null))
     })
   } catch {
     albumArtSearchCache.set(key, null)
@@ -1155,6 +1201,11 @@ let lastWinMediaRestartTime = 0
 
 function startWindowsMediaDaemon() {
   if (process.platform !== 'win32') return
+
+  // Already have a live daemon — never stack a second PowerShell poller on top
+  // of it. media-command/volume call in here whenever a stdin write fails, and
+  // without this guard each failure spawned another 300 ms polling loop.
+  if (winMediaProcess && !winMediaProcess.killed && winMediaProcess.exitCode === null) return
 
   const now = Date.now()
   if (now - lastWinMediaRestartTime < 10000) {
@@ -1642,8 +1693,10 @@ while ($true) {
       if (msg) console.warn('[SMTC stderr]', msg)
     })
 
+    const spawnedMediaProcess = winMediaProcess
     winMediaProcess.on('close', (code) => {
       console.log(`[SMTC] daemon exited (code=${code}), restarting in 5s…`)
+      if (winMediaProcess === spawnedMediaProcess) winMediaProcess = null
       if (app.isReady() && !app.isQuitting) {
         setTimeout(startWindowsMediaDaemon, 5000)
       }
@@ -1821,12 +1874,34 @@ ${setLine}
 `
 }
 
+// Same coalescing as brightness: the CoreAudio fallback shells out to
+// PowerShell, so only ever run one at a time and keep the newest level.
+let winVolumeInFlight = false
+let winVolumePending = null
+
 async function setWindowsVolumeDirect(level) {
-  const out = await runPowerShell(windowsVolumeScript(level, true))
-  const parsedOut = Number.parseInt(out.trim(), 10)
-  const actual = clamp(!isNaN(parsedOut) ? parsedOut : (Number(level) || 0), 0, 100)
-  broadcastVolume(actual)
-  return actual
+  if (winVolumeInFlight) {
+    winVolumePending = level
+    return clamp(Number(level) || 0, 0, 100)
+  }
+  winVolumeInFlight = true
+  try {
+    let current = level
+    let actual = clamp(Number(level) || 0, 0, 100)
+    for (;;) {
+      const out = await runPowerShell(windowsVolumeScript(current, true))
+      const parsedOut = Number.parseInt(out.trim(), 10)
+      actual = clamp(!isNaN(parsedOut) ? parsedOut : (Number(current) || 0), 0, 100)
+      broadcastVolume(actual)
+      if (winVolumePending === null) break
+      current = winVolumePending
+      winVolumePending = null
+    }
+    return actual
+  } finally {
+    winVolumeInFlight = false
+    winVolumePending = null
+  }
 }
 
 async function readWindowsVolumeDirect() {
@@ -1847,6 +1922,49 @@ function scheduleWindowsVolumeFallback(level, delay = 140) {
   }, delay)
 }
 
+// ─── macOS system volume (real, not simulated) ──────────────────────────────
+// Coalesced: while one osascript call is in flight the newest requested level
+// is queued and applied when it returns, so dragging the slider never spawns
+// a pile-up of processes.
+let macVolumeInFlight = false
+let macVolumePending = null
+
+function applyMacVolume(level) {
+  macVolumeInFlight = true
+  execFile('osascript', ['-e', `set volume output volume ${level}`], { timeout: 4000 }, (err) => {
+    macVolumeInFlight = false
+    if (err) console.error('[volume] macOS set failed:', err.message)
+    if (macVolumePending !== null) {
+      const next = macVolumePending
+      macVolumePending = null
+      applyMacVolume(next)
+    }
+  })
+}
+
+function setMacVolume(level) {
+  const nextLevel = clamp(Math.round(Number(level) || 0), 0, 100)
+  broadcastVolume(nextLevel)
+  if (macVolumeInFlight) {
+    macVolumePending = nextLevel
+    return
+  }
+  applyMacVolume(nextLevel)
+}
+
+function getMacVolume() {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', 'output volume of (get volume settings)'], { timeout: 4000 }, (err, stdout) => {
+      if (err) return resolve(lastKnownVolume)
+      const parsed = Number.parseInt(String(stdout).trim(), 10)
+      if (!Number.isFinite(parsed)) return resolve(lastKnownVolume)
+      const actual = clamp(parsed, 0, 100)
+      lastKnownVolume = actual
+      resolve(actual)
+    })
+  })
+}
+
 function setWindowsVolume(level) {
   if (process.platform !== 'win32') return Promise.resolve()
   const nextLevel = clamp(Number(level) || 0, 0, 100)
@@ -1861,6 +1979,7 @@ function setWindowsVolume(level) {
 }
 
 async function getWindowsVolume() {
+  if (process.platform === 'darwin') return getMacVolume()
   if (process.platform !== 'win32') return lastKnownVolume
   try {
     return await readWindowsVolumeDirect()
@@ -1874,6 +1993,30 @@ ipcMain.handle('get-system-volume', async () => getWindowsVolume())
 
 ipcMain.on('media-command', (_, command, value, source) => {
   if (process.platform === 'darwin') {
+    // Volume and seek are not transport keys — route them before the
+    // play/pause/next/prev mapping below, which would otherwise fall through
+    // and toggle playback every time the volume slider moved.
+    if (command === 'volume') {
+      setMacVolume(value)
+      return
+    }
+    if (command === 'seek') {
+      const seconds = Math.max(0, Number(value) || 0)
+      const sLowerSeek = (source || '').toLowerCase()
+      const target = sLowerSeek.includes('spotify')
+        ? 'Spotify'
+        : (sLowerSeek.includes('music') || sLowerSeek.includes('apple')) ? 'Music' : null
+      if (target) {
+        execFile('osascript', ['-e', `tell application "${target}" to set player position to ${seconds}`], { timeout: 4000 }, (err) => {
+          if (err) console.error('macOS media-command seek error:', err.message)
+        })
+      }
+      return
+    }
+    if (command !== 'playpause' && command !== 'next' && command !== 'prev' && command !== 'previous') {
+      return
+    }
+
     let script = ''
     const sLower = (source || '').toLowerCase()
     if (sLower.includes('spotify')) {
@@ -1914,7 +2057,7 @@ ipcMain.on('media-command', (_, command, value, source) => {
       }
     }
     if (script) {
-      exec(`osascript -e '${script}'`, (err) => {
+      execFile('osascript', ['-e', script], { timeout: 5000 }, (err) => {
         if (err) console.error(`macOS media-command ${command} error:`, err.message)
       })
     }
@@ -1957,8 +2100,12 @@ ipcMain.on('update-settings', (event, settings) => {
     process.env.BING_API_KEY = next.bingApiKey
   }
 
+  // Keep the in-memory copy in step so daemon restarts read fresh config
+  Object.assign(savedSettings, next)
+
   // Dynamically start/stop the agent daemon on setting changes
   if (next.betaModeEnabled) {
+    createPointerOverlayWindow()
     if (!agentProcess) {
       startAgentDaemon()
     } else if (agentProcess.stdin && !agentProcess.stdin.destroyed) {
@@ -1967,11 +2114,18 @@ ipcMain.on('update-settings', (event, settings) => {
         agentProcess.stdin.write(JSON.stringify({ type: 'set_permissions_enabled', enabled: next.agentPermissionsEnabled !== false }) + '\n')
       } catch {}
     }
-  } else if (agentProcess) {
-    try {
-      agentProcess.kill()
-    } catch {}
-    agentProcess = null
+  } else {
+    if (agentProcess) {
+      try {
+        agentProcess.kill()
+      } catch {}
+      agentProcess = null
+    }
+    // Tear the agent-only overlay renderer down again with Beta mode
+    if (pointerOverlayWindow && !pointerOverlayWindow.isDestroyed()) {
+      try { pointerOverlayWindow.destroy() } catch {}
+      pointerOverlayWindow = null
+    }
   }
 
   BrowserWindow.getAllWindows().forEach(win => {
@@ -2661,16 +2815,19 @@ app.whenReady().then(() => {
   }
 
   startWindowsMediaDaemon()   // no-op on non-Windows
-  if (savedSettings.betaModeEnabled !== false) {
+
+  // Base build ships without the AI agent. The Python daemon, its pointer
+  // overlay window and the microphone prompt only come up when the user has
+  // explicitly turned Beta mode on.
+  if (savedSettings.betaModeEnabled === true) {
     startAgentDaemon()
-  }
-  
-  if (process.platform === 'darwin' && typeof systemPreferences?.askForMediaAccess === 'function') {
-    systemPreferences.askForMediaAccess('microphone').catch(() => {})
+    createPointerOverlayWindow()
+    if (process.platform === 'darwin' && typeof systemPreferences?.askForMediaAccess === 'function') {
+      systemPreferences.askForMediaAccess('microphone').catch(() => {})
+    }
   }
 
   createWindow()
-  createPointerOverlayWindow()
 
   try {
     createTray()

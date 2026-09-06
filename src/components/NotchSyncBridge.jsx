@@ -13,6 +13,23 @@ export default function NotchSyncBridge({ open, onClose, settings = {}, onSettin
     }
   }, [open])
 
+  // Without this the panel could only be dismissed via its ✕ button, which
+  // left the notch window stuck at full-screen size if the mouse strayed.
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => { if (e.key === 'Escape') onClose?.() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
+  // Clear any transient state when the panel is dismissed
+  useEffect(() => {
+    if (!open) {
+      setPendingChanges(null)
+      setStatusMsg(null)
+    }
+  }, [open])
+
   if (!open) return null
 
   const handleApplyChange = (key, value, label) => {
@@ -281,7 +298,6 @@ export default function NotchSyncBridge({ open, onClose, settings = {}, onSettin
             padding: '24px',
             display: 'flex',
             flexDirection: 'column',
-            justify: 'center',
             alignItems: 'center',
             textAlign: 'center',
             gap: '16px',

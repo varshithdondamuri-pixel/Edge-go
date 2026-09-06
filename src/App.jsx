@@ -51,6 +51,26 @@ function filterMediaSessions(sessions, settings) {
   })
 }
 
+// Media polling hands back a fresh object every couple of seconds. Without a
+// value check that re-rendered the whole tree (notch, player, Control Center)
+// on every poll even when nothing about the track had changed.
+const MEDIA_COMPARE_KEYS = [
+  'title', 'artist', 'album', 'albumArt', 'source', 'sourceAppId',
+  'isCurrent', 'duration', 'isPlaying', 'position',
+]
+
+function mediaEqual(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  return MEDIA_COMPARE_KEYS.every(key => a[key] === b[key])
+}
+
+function sessionsEqual(a, b) {
+  if (a === b) return true
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+  return a.every((session, i) => mediaEqual(session, b[i]))
+}
+
 // Leading-and-trailing throttle-debounce helper
 function throttleDebounce(func, delay) {
   let timeoutId = null
@@ -106,7 +126,27 @@ export default function App() {
       document.documentElement.classList.add('platform-darwin')
     }
 
-    // Auto-prompt for microphone access on app startup so macOS/Windows requests system mic permission
+  }, [])
+
+  useEffect(() => {
+    const handleHashChange = () => setRoute(window.location.hash)
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  const isSettingsRoute = route.startsWith('#settings')
+  const settingsTab = new URLSearchParams(route.split('?')[1]).get('tab') || 'general'
+  useEffect(() => {
+    document.documentElement.classList.toggle('settings-root', isSettingsRoute)
+  }, [isSettingsRoute])
+
+  // The microphone is only ever used by the Beta voice agent. The base build
+  // must never pop a system mic-permission prompt, so this waits for Beta mode
+  // to actually be on (and only asks once per session).
+  const micRequestedRef = useRef(false)
+  useEffect(() => {
+    if (isSettingsRoute || !settings.betaModeEnabled || micRequestedRef.current) return
+    micRequestedRef.current = true
     const initMicPermission = async () => {
       try {
         if (window.electronAPI?.requestMicPermission) {
@@ -121,19 +161,7 @@ export default function App() {
       }
     }
     initMicPermission()
-  }, [])
-
-  useEffect(() => {
-    const handleHashChange = () => setRoute(window.location.hash)
-    window.addEventListener('hashchange', handleHashChange)
-    return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [])
-
-  const isSettingsRoute = route.startsWith('#settings')
-  const settingsTab = new URLSearchParams(route.split('?')[1]).get('tab') || 'general'
-  useEffect(() => {
-    document.documentElement.classList.toggle('settings-root', isSettingsRoute)
-  }, [isSettingsRoute])
+  }, [settings.betaModeEnabled, isSettingsRoute])
 
   // ── Settings Sync (from main window → settings window via IPC) ──────────
   useEffect(() => {
@@ -237,7 +265,7 @@ export default function App() {
       if (!isMounted) return
       const sessions = Array.isArray(info) ? filterMediaSessions(info, settings) : []
       if (sessions.length > 0) {
-        setAllSessions(sessions)
+        setAllSessions(prev => (sessionsEqual(prev, sessions) ? prev : sessions))
         const currentPlaying = sessions.find(s => s.isCurrent && s.isPlaying)
         const current        = sessions.find(s => s.isCurrent)
         const spotify        = sessions.find(s => s.source?.toLowerCase().includes('spotify') && s.isPlaying)
@@ -263,10 +291,16 @@ export default function App() {
             })
           }
         }
-        setMedia(prev => ({ ...selected, volume: prev.volume ?? selected.volume ?? 50 }))
+        setMedia(prev => {
+          const next = { ...selected, volume: prev.volume ?? selected.volume ?? 50 }
+          return mediaEqual(prev, next) ? prev : next
+        })
       } else {
-        setAllSessions([])
-        setMedia(prev => ({ ...INITIAL_MEDIA, volume: prev.volume ?? 50 }))
+        setAllSessions(prev => (prev.length === 0 ? prev : []))
+        setMedia(prev => {
+          const next = { ...INITIAL_MEDIA, volume: prev.volume ?? 50 }
+          return mediaEqual(prev, next) ? prev : next
+        })
       }
     }
 
@@ -373,6 +407,7 @@ export default function App() {
   const [sneakPeekBanner, setSneakPeekBanner] = useState(null)
   const prevTitleRef = useRef('')
   const prevAlbumArtRef = useRef('')
+  const clearSneakPeekBanner = useCallback(() => setSneakPeekBanner(null), [])
 
   const throttledVolumeIPC = useRef(
     throttleDebounce((level, sourceAppId, source) => {
@@ -426,16 +461,16 @@ export default function App() {
   }, [showVolumeHUD, throttledVolumeIPC])
 
   // ── Control Center / Clipboard window resize ──────────────────────────────
+  // Every overlay that needs the big window counts here. This used to be two
+  // separate effects sending set-control-center with different values on the
+  // same render, so the main process resized the window twice (and re-focused
+  // it) for every toggle.
+  const isOverlayOpen = controlCenterOpen || clipboardOpen || syncBridgeOpen || wakeActive
   useEffect(() => {
-    if (!isSettingsRoute && isElectron) {
-      if (window.electronAPI.setControlCenter) {
-        window.electronAPI.setControlCenter(controlCenterOpen || clipboardOpen)
-      }
-      if (window.electronAPI.setControlCenterDocked) {
-        window.electronAPI.setControlCenterDocked(!!(settings.docked && controlCenterOpen))
-      }
-    }
-  }, [controlCenterOpen, clipboardOpen, settings.docked, isSettingsRoute])
+    if (isSettingsRoute || !isElectron) return
+    window.electronAPI.setControlCenter?.(isOverlayOpen)
+    window.electronAPI.setControlCenterDocked?.(!!(settings.docked && controlCenterOpen))
+  }, [isOverlayOpen, controlCenterOpen, settings.docked, isSettingsRoute])
 
   // ── Close overlays on focus loss (window blur) ──────────────────────────
   useEffect(() => {
@@ -514,14 +549,6 @@ export default function App() {
     )
   }
 
-  const isOverlayOpen = controlCenterOpen || clipboardOpen || syncBridgeOpen || wakeActive
-
-  useEffect(() => {
-    if (isElectron && window.electronAPI?.setControlCenter) {
-      window.electronAPI.setControlCenter(isOverlayOpen)
-    }
-  }, [isOverlayOpen])
-
   return (
     <>
       <NotchBar
@@ -529,7 +556,7 @@ export default function App() {
         battery={battery}
         settings={settings}
         sneakPeekBanner={sneakPeekBanner}
-        onClearBanner={() => setSneakPeekBanner(null)}
+        onClearBanner={clearSneakPeekBanner}
         isOverlayOpen={isOverlayOpen}
         onPlayPause={handlePlayPause}
         onNext={handleNext}

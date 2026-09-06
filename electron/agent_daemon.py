@@ -2447,1071 +2447,1071 @@ async def process_prompt(prompt_text):
         print(json.dumps({"type": "thought", "text": "Tokenizing prompt and analyzing intent offline...\n"}), flush=True)
         await asyncio.sleep(0.3)
     
-    # Rule-based intent overrides for absolute reliability
-    matched_intent = None
-    if any(k in prompt_lower for k in ["update app", "git update", "auto update", "check for updates", "update edge go", "pull updates", "update from git"]):
-        matched_intent = "git_update"
-    elif any(keyword in prompt_lower for keyword in ["git status", "git diff", "git log", "git commit", "git checkout"]):
-        matched_intent = "git"
-    elif "click" in prompt_lower or "coordinate" in prompt_lower or "move mouse" in prompt_lower:
-        matched_intent = "click"
-    # ── New high-priority rules ──
-    elif any(k in prompt_lower for k in ["create presentation", "make presentation", "build presentation", "create slides", "make slides", "build slides", "slideshow", "powerpoint"]):
-        matched_intent = "create_presentation"
-    elif any(k in prompt_lower for k in ["search the web", "search web", "search for", "search online", "find online", "google search", "web search", "look up online"]):
-        matched_intent = "web_search"
-    elif any(k in prompt_lower for k in ["create html", "make html", "build html", "create webpage", "make webpage", "build webpage", "make a website", "create a website", "html page", "landing page"]):
-        matched_intent = "create_html"
-    elif any(k in prompt_lower for k in ["create document", "make document", "create a doc", "make a doc", "create excel", "make excel", "create spreadsheet", "make spreadsheet", "create csv", "write document", "create file", "make file", "create word", "word document"]):
-        matched_intent = "create_document"
-    elif any(k in prompt_lower for k in ["play video", "watch video", "play music", "open youtube", "youtube video", "play on brave", "play on chrome", "play on edge", "play in brave", "play in chrome", "brave browser", "netflix", "spotify"]):
-        matched_intent = "play_video"
-    elif any(k in prompt_lower for k in ["open word", "open excel", "open onenote", "open outlook", "open teams", "open powerpoint", "open notepad", "microsoft word", "microsoft excel", "microsoft onenote", "microsoft teams", "microsoft outlook", "onenote", "sticky notes", "open paint", "file explorer"]):
-        matched_intent = "microsoft_app"
-    elif any(k in prompt_lower for k in ["multi agent", "multi-agent", "multiple agents", "orchestrate", "spawn agents", "run agents", "agent pipeline"]):
-        matched_intent = "multi_agent"
-    elif any(k in prompt_lower for k in ["volume up", "volume down", "increase volume", "decrease volume", "turn up volume", "turn down volume", "mute volume", "unmute volume", "mute", "unmute", "set volume", "make it louder", "make it quieter"]):
-        matched_intent = "volume_control"
-    elif any(k in prompt_lower for k in ["next song", "skip song", "previous song", "next track", "previous track", "skip track", "pause music", "pause song", "resume music", "resume song", "play/pause", "play pause", "stop music", "play next", "play previous", "media play", "media pause", "media next", "media prev", "pause", "resume", "skip"]):
-        matched_intent = "media_control"
-    # ── Existing rules ──
-    elif "open browser" in prompt_lower or "open website" in prompt_lower or "chrome" in prompt_lower or "google.com" in prompt_lower or "github.com" in prompt_lower:
-        matched_intent = "browser"
-    elif "notion" in prompt_lower:
-        matched_intent = "notion"
-    elif "instagram" in prompt_lower or "post" in prompt_lower:
-        matched_intent = "instagram"
-    elif "whatsapp" in prompt_lower or "message" in prompt_lower or "text" in prompt_lower:
-        matched_intent = "whatsapp"
-    elif "screenshot" in prompt_lower or "capture screen" in prompt_lower:
-        matched_intent = "screenshot"
-    elif "help" in prompt_lower or prompt_lower.strip() in ["?", "hello", "hi"]:
-        matched_intent = "help"
-
-    # If no rule matches, search intents using TF-IDF similarity
-    if not matched_intent:
-        print(json.dumps({"type": "thought", "text": "No direct rule matched. Searching intent space using TF-IDF...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        intent_matches = intent_engine.search(prompt_text, top_n=1)
-        if intent_matches and intent_matches[0][0] > 0.15:
-            matched_intent = intent_matches[0][1]["id"]
-            print(json.dumps({"type": "thought", "text": f"Classified intent: '{matched_intent}' (similarity: {intent_matches[0][0]:.2f})\n"}), flush=True)
-            await asyncio.sleep(0.2)
-        else:
-            # Default to QA search over documentation
-            matched_intent = "qa_search"
-            print(json.dumps({"type": "thought", "text": "Classified as general inquiry. Initiating local QA database search...\n"}), flush=True)
-            await asyncio.sleep(0.2)
-
-    if matched_intent and matched_intent != "qa_search":
-        auto_train_intent(matched_intent, prompt_text)
-
-    # Check action permission before executing sensitive intent
-    permission_actions = {
-        "click": ("Click Coordinates", f"Click mouse at screen coordinates for: '{prompt_text}'", "low"),
-        "git_update": ("Execute Git Update", "Check remote repository and fetch updates using Git", "medium"),
-        "git": ("Run Git Command", f"Execute command line: '{prompt_text}'", "medium"),
-        "web_search": ("Search Web", f"Perform web search query: '{prompt_text}'", "low"),
-        "create_html": ("Create HTML Webpage", f"Generate HTML document for: '{prompt_text}'", "medium"),
-        "create_document": ("Create Document", f"Generate document file for: '{prompt_text}'", "medium"),
-        "create_presentation": ("Create Slideshow", f"Generate PowerPoint presentation for: '{prompt_text}'", "medium"),
-        "play_video": ("Launch Media Player", f"Open browser/media player to play: '{prompt_text}'", "low"),
-        "microsoft_app": ("Launch Application", f"Launch Windows application for: '{prompt_text}'", "medium"),
-        "browser": ("Open Web Browser", f"Open web browser for: '{prompt_text}'", "low"),
-        "notion": ("Open Notion", f"Access Notion workspace for: '{prompt_text}'", "low"),
-        "instagram": ("Open Instagram", f"Access social media client for: '{prompt_text}'", "low"),
-        "whatsapp": ("Open WhatsApp", f"Access messaging client for: '{prompt_text}'", "low"),
-        "screenshot": ("Take Screenshot", "Capture current display screenshot", "low"),
-        "multi_agent": ("Spawn Multi-Agent Pipeline", f"Run multi-agent subtasks for: '{prompt_text}'", "high"),
-        "list_files": ("List Directory Files", f"Inspect and list directory contents for: '{prompt_text}'", "low"),
-        "launch_exe": ("Launch Executable Program", f"Load and execute program for: '{prompt_text}'", "medium"),
-    }
-
-    if matched_intent in permission_actions:
-        perm_title, perm_details, perm_risk = permission_actions[matched_intent]
-        granted = await request_action_permission(perm_title, perm_details, perm_risk)
-        if not granted:
-            final_reply = f"⚠️ **Action Cancelled**\n\nUser permission was denied for action: **{perm_title}**."
-            print(json.dumps({"type": "done", "text": final_reply}), flush=True)
-            print(json.dumps({"type": "status", "state": "idle"}), flush=True)
-            agent_busy = False
-            return
-
-    # 2. Orchestrate Subagents, Tools and Build response
-    final_reply = ""
-    
-    if matched_intent == "click":
-        print(json.dumps({"type": "thought", "text": "Extracting screen coordinates from command...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn Screen Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_screen",
-            "description": "Verify screen bounds",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "capture_screen", "args": {}}), flush=True)
-        screen_res = capture_screen()
-        await asyncio.sleep(0.3)
-        print(json.dumps({"type": "tool_done", "result": screen_res}), flush=True)
-        
-        # Extract X and Y
-        x, y = 600, 400
-        numbers = re.findall(r'\d+', prompt_text)
-        if len(numbers) >= 2:
-            x, y = int(numbers[0]), int(numbers[1])
-            
-        # Spawn Click Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_click",
-            "description": f"Perform coordinate click at ({x}, {y})",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "click_at_coordinates", "args": {"x": x, "y": y}}), flush=True)
-        click_res = click_at_coordinates(x, y)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": click_res}), flush=True)
-        
-        final_reply = (
-            f"🎯 **Coordinate Click Executed**\n\n"
-            f"1. Verified screen geometry: `{screen_res}`.\n"
-            f"2. Routed coordinates to Display Overlay subagent.\n"
-            f"3. Executed mouse pointer click at target: **({x}, {y})**.\n\n"
-            f"Offline click routine completed successfully."
-        )
-    elif matched_intent == "git_update":
-        print(json.dumps({"type": "thought", "text": "Checking internet connection and fetching Git remote updates...\n"}), flush=True)
-        await asyncio.sleep(0.05)
-        
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_git_update",
-            "description": "Check Git remote repository status",
-        }), flush=True)
-        await asyncio.sleep(0.05)
-        
-        print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": "git fetch origin && git status -uno"}}), flush=True)
-        cmd_result = run_command("git fetch origin && git status -uno")
-        await asyncio.sleep(0.05)
-        print(json.dumps({"type": "tool_done", "result": cmd_result[:300] + ("..." if len(cmd_result) > 300 else "")}), flush=True)
-        
-        final_reply = (
-            f"🔄 **Git Auto-Update Check**\n\n"
-            f"Polled remote repository (`origin`).\n\n"
-            f"```bash\n{cmd_result}\n```\n\n"
-            f"To pull updates automatically, open **Settings > Software Updates** or ask *'pull updates'*"
-        )
-        
-    elif matched_intent == "git":
-        # Determine the git command to run
-        git_cmd = "git status"
-        # If user specifies a command start with git, run it
-        git_match = re.search(r'\b(git\s+[\w\s\-_.]+)', prompt_text, re.IGNORECASE)
-        if git_match:
-            git_cmd = git_match.group(1).strip()
-        else:
-            if "status" in prompt_lower:
-                git_cmd = "git status"
-            elif "log" in prompt_lower:
-                git_cmd = "git log -n 5 --oneline"
-            elif "diff" in prompt_lower:
-                git_cmd = "git diff"
-                
-        print(json.dumps({"type": "thought", "text": f"Command executor active. Preparing: '{git_cmd}'...\n"}), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Spawn Git Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_git",
-            "description": "Execute local Git shell command",
-        }), flush=True)
-        await asyncio.sleep(0.4)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": git_cmd}}), flush=True)
-        cmd_result = run_command(git_cmd)
-        await asyncio.sleep(0.5)
-        print(json.dumps({"type": "tool_done", "result": cmd_result[:300] + ("..." if len(cmd_result) > 300 else "")}), flush=True)
-        
-        final_reply = (
-            f"📁 **Git Repository Status**\n\n"
-            f"Executed shell command: `{git_cmd}` in workspace.\n\n"
-            f"```bash\n{cmd_result}\n```"
-        )
-        
-    elif matched_intent == "notion":
-        notion_cmd = "notion-cli search"
-        print(json.dumps({"type": "thought", "text": "Preparing Notion search via workspace CLI...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn Notion Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_notion",
-            "description": "Access local Notion database via workspace CLI",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": notion_cmd}}), flush=True)
-        cmd_result = run_command(notion_cmd)
-        await asyncio.sleep(0.4)
-        
-        if "Failed to execute" in cmd_result or "not found" in cmd_result or "[Command executed with no output]" in cmd_result:
-            # Fallback to simulated workspace results if notion-cli is not globally installed
-            cmd_result = (
-                "Search results from cached notion-db:\n"
-                "1. [Edge Go Project Docs] - Last edited: Today (varshith)\n"
-                "2. [Clicky Beta Walkthrough] - Last edited: 2h ago (system)"
-            )
-            
-        print(json.dumps({"type": "tool_done", "result": cmd_result}), flush=True)
-        
-        final_reply = (
-            f"📝 **Notion Workspace Search**\n\n"
-            f"Polled Notion document registry database:\n\n"
-            f"```markdown\n{cmd_result}\n```"
-        )
-        
-    elif matched_intent == "browser":
-        # Extract target URL or search term
-        target_url = "https://google.com"
-        if "github" in prompt_lower:
-            target_url = "https://github.com"
-        elif "google" in prompt_lower:
-            target_url = "https://google.com"
+        # Rule-based intent overrides for absolute reliability
+        matched_intent = None
+        if any(k in prompt_lower for k in ["update app", "git update", "auto update", "check for updates", "update edge go", "pull updates", "update from git"]):
+            matched_intent = "git_update"
+        elif any(keyword in prompt_lower for keyword in ["git status", "git diff", "git log", "git commit", "git checkout"]):
+            matched_intent = "git"
+        elif "click" in prompt_lower or "coordinate" in prompt_lower or "move mouse" in prompt_lower:
+            matched_intent = "click"
+        # ── New high-priority rules ──
+        elif any(k in prompt_lower for k in ["create presentation", "make presentation", "build presentation", "create slides", "make slides", "build slides", "slideshow", "powerpoint"]):
+            matched_intent = "create_presentation"
+        elif any(k in prompt_lower for k in ["search the web", "search web", "search for", "search online", "find online", "google search", "web search", "look up online"]):
+            matched_intent = "web_search"
+        elif any(k in prompt_lower for k in ["create html", "make html", "build html", "create webpage", "make webpage", "build webpage", "make a website", "create a website", "html page", "landing page"]):
+            matched_intent = "create_html"
+        elif any(k in prompt_lower for k in ["create document", "make document", "create a doc", "make a doc", "create excel", "make excel", "create spreadsheet", "make spreadsheet", "create csv", "write document", "create file", "make file", "create word", "word document"]):
+            matched_intent = "create_document"
+        elif any(k in prompt_lower for k in ["play video", "watch video", "play music", "open youtube", "youtube video", "play on brave", "play on chrome", "play on edge", "play in brave", "play in chrome", "brave browser", "netflix", "spotify"]):
+            matched_intent = "play_video"
+        elif any(k in prompt_lower for k in ["open word", "open excel", "open onenote", "open outlook", "open teams", "open powerpoint", "open notepad", "microsoft word", "microsoft excel", "microsoft onenote", "microsoft teams", "microsoft outlook", "onenote", "sticky notes", "open paint", "file explorer"]):
+            matched_intent = "microsoft_app"
+        elif any(k in prompt_lower for k in ["multi agent", "multi-agent", "multiple agents", "orchestrate", "spawn agents", "run agents", "agent pipeline"]):
+            matched_intent = "multi_agent"
+        elif any(k in prompt_lower for k in ["volume up", "volume down", "increase volume", "decrease volume", "turn up volume", "turn down volume", "mute volume", "unmute volume", "mute", "unmute", "set volume", "make it louder", "make it quieter"]):
+            matched_intent = "volume_control"
+        elif any(k in prompt_lower for k in ["next song", "skip song", "previous song", "next track", "previous track", "skip track", "pause music", "pause song", "resume music", "resume song", "play/pause", "play pause", "stop music", "play next", "play previous", "media play", "media pause", "media next", "media prev", "pause", "resume", "skip"]):
+            matched_intent = "media_control"
+        # ── Existing rules ──
+        elif "open browser" in prompt_lower or "open website" in prompt_lower or "chrome" in prompt_lower or "google.com" in prompt_lower or "github.com" in prompt_lower:
+            matched_intent = "browser"
         elif "notion" in prompt_lower:
-            target_url = "https://notion.so"
-        else:
-            # Regex match for domain
-            url_match = re.search(r'([a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}(?:/[^\s]*)?)', prompt_text)
-            if url_match:
-                target_url = url_match.group(1).strip()
-                if not target_url.startswith("http"):
-                    target_url = "https://" + target_url
+            matched_intent = "notion"
+        elif "instagram" in prompt_lower or "post" in prompt_lower:
+            matched_intent = "instagram"
+        elif "whatsapp" in prompt_lower or "message" in prompt_lower or "text" in prompt_lower:
+            matched_intent = "whatsapp"
+        elif "screenshot" in prompt_lower or "capture screen" in prompt_lower:
+            matched_intent = "screenshot"
+        elif "help" in prompt_lower or prompt_lower.strip() in ["?", "hello", "hi"]:
+            matched_intent = "help"
 
-        print(json.dumps({"type": "thought", "text": f"Preparing to open browser at URL: {target_url}...\n"}), flush=True)
-        await asyncio.sleep(0.2)
+        # If no rule matches, search intents using TF-IDF similarity
+        if not matched_intent:
+            print(json.dumps({"type": "thought", "text": "No direct rule matched. Searching intent space using TF-IDF...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+            intent_matches = intent_engine.search(prompt_text, top_n=1)
+            if intent_matches and intent_matches[0][0] > 0.15:
+                matched_intent = intent_matches[0][1]["id"]
+                print(json.dumps({"type": "thought", "text": f"Classified intent: '{matched_intent}' (similarity: {intent_matches[0][0]:.2f})\n"}), flush=True)
+                await asyncio.sleep(0.2)
+            else:
+                # Default to QA search over documentation
+                matched_intent = "qa_search"
+                print(json.dumps({"type": "thought", "text": "Classified as general inquiry. Initiating local QA database search...\n"}), flush=True)
+                await asyncio.sleep(0.2)
+
+        if matched_intent and matched_intent != "qa_search":
+            auto_train_intent(matched_intent, prompt_text)
+
+        # Check action permission before executing sensitive intent
+        permission_actions = {
+            "click": ("Click Coordinates", f"Click mouse at screen coordinates for: '{prompt_text}'", "low"),
+            "git_update": ("Execute Git Update", "Check remote repository and fetch updates using Git", "medium"),
+            "git": ("Run Git Command", f"Execute command line: '{prompt_text}'", "medium"),
+            "web_search": ("Search Web", f"Perform web search query: '{prompt_text}'", "low"),
+            "create_html": ("Create HTML Webpage", f"Generate HTML document for: '{prompt_text}'", "medium"),
+            "create_document": ("Create Document", f"Generate document file for: '{prompt_text}'", "medium"),
+            "create_presentation": ("Create Slideshow", f"Generate PowerPoint presentation for: '{prompt_text}'", "medium"),
+            "play_video": ("Launch Media Player", f"Open browser/media player to play: '{prompt_text}'", "low"),
+            "microsoft_app": ("Launch Application", f"Launch Windows application for: '{prompt_text}'", "medium"),
+            "browser": ("Open Web Browser", f"Open web browser for: '{prompt_text}'", "low"),
+            "notion": ("Open Notion", f"Access Notion workspace for: '{prompt_text}'", "low"),
+            "instagram": ("Open Instagram", f"Access social media client for: '{prompt_text}'", "low"),
+            "whatsapp": ("Open WhatsApp", f"Access messaging client for: '{prompt_text}'", "low"),
+            "screenshot": ("Take Screenshot", "Capture current display screenshot", "low"),
+            "multi_agent": ("Spawn Multi-Agent Pipeline", f"Run multi-agent subtasks for: '{prompt_text}'", "high"),
+            "list_files": ("List Directory Files", f"Inspect and list directory contents for: '{prompt_text}'", "low"),
+            "launch_exe": ("Launch Executable Program", f"Load and execute program for: '{prompt_text}'", "medium"),
+        }
+
+        if matched_intent in permission_actions:
+            perm_title, perm_details, perm_risk = permission_actions[matched_intent]
+            granted = await request_action_permission(perm_title, perm_details, perm_risk)
+            if not granted:
+                final_reply = f"⚠️ **Action Cancelled**\n\nUser permission was denied for action: **{perm_title}**."
+                print(json.dumps({"type": "done", "text": final_reply}), flush=True)
+                print(json.dumps({"type": "status", "state": "idle"}), flush=True)
+                agent_busy = False
+                return
+
+        # 2. Orchestrate Subagents, Tools and Build response
+        final_reply = ""
+    
+        if matched_intent == "click":
+            print(json.dumps({"type": "thought", "text": "Extracting screen coordinates from command...\n"}), flush=True)
+            await asyncio.sleep(0.2)
         
-        # Spawn Browser Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_browser",
-            "description": "Start system web browser session",
-        }), flush=True)
-        await asyncio.sleep(0.3)
+            # Spawn Screen Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_screen",
+                "description": "Verify screen bounds",
+            }), flush=True)
+            await asyncio.sleep(0.3)
         
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "open_browser", "args": {"url": target_url}}), flush=True)
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "capture_screen", "args": {}}), flush=True)
+            screen_res = capture_screen()
+            await asyncio.sleep(0.3)
+            print(json.dumps({"type": "tool_done", "result": screen_res}), flush=True)
         
-        try:
-            webbrowser.open(target_url)
-            browser_res = f"Opened browser tab at {target_url}"
-        except Exception as e:
-            browser_res = f"Error opening browser: {str(e)}"
+            # Extract X and Y
+            x, y = 600, 400
+            numbers = re.findall(r'\d+', prompt_text)
+            if len(numbers) >= 2:
+                x, y = int(numbers[0]), int(numbers[1])
             
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": browser_res}), flush=True)
+            # Spawn Click Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_click",
+                "description": f"Perform coordinate click at ({x}, {y})",
+            }), flush=True)
+            await asyncio.sleep(0.3)
         
-        final_reply = (
-            f"🌐 **Browser Session Initiated**\n\n"
-            f"Successfully launched target page in your default system browser:\n"
-            f"👉 **[{target_url}]({target_url})**"
-        )
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "click_at_coordinates", "args": {"x": x, "y": y}}), flush=True)
+            click_res = click_at_coordinates(x, y)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": click_res}), flush=True)
         
-    elif matched_intent == "instagram":
-        post_content = "Edge Go Windows Beta is live! 🚀"
-        content_match = re.search(r'(?:post|caption)[:\s]+(.+)', prompt_text, re.IGNORECASE)
-        if content_match:
-            post_content = content_match.group(1).strip()
+            final_reply = (
+                f"🎯 **Coordinate Click Executed**\n\n"
+                f"1. Verified screen geometry: `{screen_res}`.\n"
+                f"2. Routed coordinates to Display Overlay subagent.\n"
+                f"3. Executed mouse pointer click at target: **({x}, {y})**.\n\n"
+                f"Offline click routine completed successfully."
+            )
+        elif matched_intent == "git_update":
+            print(json.dumps({"type": "thought", "text": "Checking internet connection and fetching Git remote updates...\n"}), flush=True)
+            await asyncio.sleep(0.05)
+        
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_git_update",
+                "description": "Check Git remote repository status",
+            }), flush=True)
+            await asyncio.sleep(0.05)
+        
+            print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": "git fetch origin && git status -uno"}}), flush=True)
+            cmd_result = run_command("git fetch origin && git status -uno")
+            await asyncio.sleep(0.05)
+            print(json.dumps({"type": "tool_done", "result": cmd_result[:300] + ("..." if len(cmd_result) > 300 else "")}), flush=True)
+        
+            final_reply = (
+                f"🔄 **Git Auto-Update Check**\n\n"
+                f"Polled remote repository (`origin`).\n\n"
+                f"```bash\n{cmd_result}\n```\n\n"
+                f"To pull updates automatically, open **Settings > Software Updates** or ask *'pull updates'*"
+            )
+        
+        elif matched_intent == "git":
+            # Determine the git command to run
+            git_cmd = "git status"
+            # If user specifies a command start with git, run it
+            git_match = re.search(r'\b(git\s+[\w\s\-_.]+)', prompt_text, re.IGNORECASE)
+            if git_match:
+                git_cmd = git_match.group(1).strip()
+            else:
+                if "status" in prompt_lower:
+                    git_cmd = "git status"
+                elif "log" in prompt_lower:
+                    git_cmd = "git log -n 5 --oneline"
+                elif "diff" in prompt_lower:
+                    git_cmd = "git diff"
+                
+            print(json.dumps({"type": "thought", "text": f"Command executor active. Preparing: '{git_cmd}'...\n"}), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Spawn Git Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_git",
+                "description": "Execute local Git shell command",
+            }), flush=True)
+            await asyncio.sleep(0.4)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": git_cmd}}), flush=True)
+            cmd_result = run_command(git_cmd)
+            await asyncio.sleep(0.5)
+            print(json.dumps({"type": "tool_done", "result": cmd_result[:300] + ("..." if len(cmd_result) > 300 else "")}), flush=True)
+        
+            final_reply = (
+                f"📁 **Git Repository Status**\n\n"
+                f"Executed shell command: `{git_cmd}` in workspace.\n\n"
+                f"```bash\n{cmd_result}\n```"
+            )
+        
+        elif matched_intent == "notion":
+            notion_cmd = "notion-cli search"
+            print(json.dumps({"type": "thought", "text": "Preparing Notion search via workspace CLI...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Notion Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_notion",
+                "description": "Access local Notion database via workspace CLI",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "run_command", "args": {"CommandLine": notion_cmd}}), flush=True)
+            cmd_result = run_command(notion_cmd)
+            await asyncio.sleep(0.4)
+        
+            if "Failed to execute" in cmd_result or "not found" in cmd_result or "[Command executed with no output]" in cmd_result:
+                # Fallback to simulated workspace results if notion-cli is not globally installed
+                cmd_result = (
+                    "Search results from cached notion-db:\n"
+                    "1. [Edge Go Project Docs] - Last edited: Today (varshith)\n"
+                    "2. [Clicky Beta Walkthrough] - Last edited: 2h ago (system)"
+                )
             
-        print(json.dumps({"type": "thought", "text": "Publishing post to Instagram simulated API feed...\n"}), flush=True)
-        await asyncio.sleep(0.2)
+            print(json.dumps({"type": "tool_done", "result": cmd_result}), flush=True)
         
-        # Spawn Instagram Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_instagram",
-            "description": "Publish post to Instagram API",
-        }), flush=True)
-        await asyncio.sleep(0.3)
+            final_reply = (
+                f"📝 **Notion Workspace Search**\n\n"
+                f"Polled Notion document registry database:\n\n"
+                f"```markdown\n{cmd_result}\n```"
+            )
         
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "instagram_operation", "args": {"action": "post", "post_content": post_content}}), flush=True)
-        insta_res = instagram_operation("post", post_content)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": insta_res}), flush=True)
-        
-        final_reply = (
-            f"📸 **Instagram Operation Successful**\n\n"
-            f"Published post to simulated feed:\n"
-            f"📝 *\"{post_content}\"*\n\n"
-            f"Open your Control Center Instagram tab to view the live update."
-        )
-        
-    elif matched_intent == "whatsapp":
-        contact = "Farza"
-        message_content = "Hey Clicky! Testing the offline WhatsApp integration."
-        
-        to_match = re.search(r'(?:to|message|text)\s+([a-zA-Z0-9_]+)', prompt_text, re.IGNORECASE)
-        if to_match:
-            contact = to_match.group(1).capitalize()
-            
-        content_match = re.search(r'(?:message|text|content|saying)[:\s]+(.+)', prompt_text, re.IGNORECASE)
-        if content_match:
-            message_content = content_match.group(1).strip()
-            
-        print(json.dumps({"type": "thought", "text": f"Preparing simulated WhatsApp message to {contact}...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_whatsapp",
-            "description": f"Send WhatsApp message to {contact}",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        print(json.dumps({"type": "tool_call", "name": "whatsapp_operation", "args": {"action": "send", "contact": contact, "message": message_content}}), flush=True)
-        whatsapp_res = whatsapp_operation("send", contact, message_content)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": whatsapp_res}), flush=True)
-        
-        final_reply = (
-            f"🟢 **WhatsApp Message Sent**\n\n"
-            f"Recipient: `{contact}`\n"
-            f"Message: *\"{message_content}\"*\n\n"
-            f"Your docked Agent Bar has been updated with the sent message."
-        )
-        
-    elif matched_intent == "screenshot":
-        print(json.dumps({"type": "thought", "text": "Capturing display geometry metrics...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn Screen Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_screen",
-            "description": "Capture display geometry",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "capture_screen", "args": {}}), flush=True)
-        screen_res = capture_screen()
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": screen_res}), flush=True)
-        
-        final_reply = (
-            f"🖥️ **Screen Captured Successfully**\n\n"
-            f"Main display properties:\n"
-            f"```json\n{screen_res}\n```"
-        )
-        
-    elif matched_intent == "help":
-        final_reply = (
-            "👋 **Hello! I am Clicky — Edge Go Agent**\n\n"
-            "I run completely on your machine. Here's everything I can do:\n\n"
-            "1. 🎯 **Coordinate Clicking**\n"
-            "   *'click at 700 500'* — moves cursor & performs real click\n\n"
-            "2. 📁 **Terminal & Git**\n"
-            "   *'show git status'* / *'run git log'* — executes real shell commands\n\n"
-            "3. 🌐 **Web Search** (no API key)\n"
-            "   *'search the web for Python tutorials'* — DuckDuckGo results\n\n"
-            "4. 📄 **Create HTML Pages**\n"
-            "   *'create a landing page for my portfolio'* — generates & opens in browser\n\n"
-            "5. 📊 **Create Slides / Presentations**\n"
-            "   *'create a presentation about machine learning'* — generates interactive slideshow\n\n"
-            "6. 📝 **Create Documents**\n"
-            "   *'create a document: outline.txt'* — generates & opens document\n\n"
-            "7. ▶️ **Play Videos in Browser**\n"
-            "   *'play lofi music on YouTube in Brave'* / *'open Netflix in Edge'*\n\n"
-            "8. 🖥️ **Microsoft App Integration**\n"
-            "   *'open OneNote'* / *'open Word'* / *'launch Excel'*\n\n"
-            "8. 🤖 **Multi-Agent Orchestration**\n"
-            "   *'orchestrate agents to research and write a report'*\n\n"
-            "9. 🔍 **Workspace QA Search**\n"
-            "   *'what is clicky?'* — searches your local codebase docs\n\n"
-            "10. 🎙️ **Voice Wake Word**\n"
-            "    Say *'Hey Clicky'* — I start listening for your command"
-        )
+        elif matched_intent == "browser":
+            # Extract target URL or search term
+            target_url = "https://google.com"
+            if "github" in prompt_lower:
+                target_url = "https://github.com"
+            elif "google" in prompt_lower:
+                target_url = "https://google.com"
+            elif "notion" in prompt_lower:
+                target_url = "https://notion.so"
+            else:
+                # Regex match for domain
+                url_match = re.search(r'([a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}(?:/[^\s]*)?)', prompt_text)
+                if url_match:
+                    target_url = url_match.group(1).strip()
+                    if not target_url.startswith("http"):
+                        target_url = "https://" + target_url
 
-    # ══════════════════════════════════════════════════════════════
-    # NEW INTENT BRANCHES
-    # ══════════════════════════════════════════════════════════════
-
-    elif matched_intent == "launch_exe":
-        print(json.dumps({"type": "thought", "text": f"Preparing executable program launcher for: '{prompt_text}'...\n"}), flush=True)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_exe", "description": "Launch Executable Program"}), flush=True)
-        print(json.dumps({"type": "tool_call", "name": "launch_executable", "args": {"prompt": prompt_text}}), flush=True)
-
-        # Extract path if explicit path mentioned
-        matched_path = None
-        for word in prompt_text.split():
-            if word.lower().endswith(('.exe', '.cmd', '.bat', '.app', '.lnk')) or '\\' in word or '/' in word:
-                matched_path = word.strip('"').strip("'")
-                break
-
-        if matched_path and os.path.exists(matched_path):
+            print(json.dumps({"type": "thought", "text": f"Preparing to open browser at URL: {target_url}...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Browser Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_browser",
+                "description": "Start system web browser session",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "open_browser", "args": {"url": target_url}}), flush=True)
+        
             try:
-                if IS_WINDOWS:
-                    subprocess.Popen(f'start "" "{matched_path}"', shell=True)
-                else:
-                    subprocess.Popen(['open', matched_path])
-                print(json.dumps({"type": "tool_done", "result": f"Launched executable: {matched_path}"}), flush=True)
-                final_reply = f"🚀 **Executable Launched Successfully!**\n\nProgram path: `{matched_path}`"
+                webbrowser.open(target_url)
+                browser_res = f"Opened browser tab at {target_url}"
             except Exception as e:
-                print(json.dumps({"type": "tool_done", "result": f"Execution error: {str(e)}"}), flush=True)
-                final_reply = f"⚠️ **Executable Launch Failed:** {str(e)}"
-        else:
-            print(json.dumps({"type": "tool_done", "result": "Triggering Windows File Explorer launcher dialog"}), flush=True)
-            final_reply = (
-                f"🚀 **Program Launcher Active**\n\n"
-                f"Use the **'🚀 Load .exe Program'** button in the Notch Sync Bridge or Agent Panel to select any executable (`.exe`) file from File Explorer!"
-            )
-
-    elif matched_intent == "list_files":
-        print(json.dumps({"type": "thought", "text": f"Scanning directory contents for: '{prompt_text}'...\n"}), flush=True)
-
-        target_dir = REPO_ROOT
-        p_lower = prompt_lower
-        if 'desktop' in p_lower:
-            target_dir = str(DESKTOP_PATH)
-        elif 'document' in p_lower:
-            target_dir = str(DOCUMENTS_PATH)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_list", "description": f"Scan directory: '{os.path.basename(target_dir)}'"}), flush=True)
-        print(json.dumps({"type": "tool_call", "name": "list_directory", "args": {"path": target_dir}}), flush=True)
-
-        items = []
-        try:
-            entries = list(os.scandir(target_dir))
-            entries.sort(key=lambda e: (not e.is_dir(), e.name.lower()))
-            for entry in entries:
-                if entry.name.startswith('.'): continue
-                is_dir = entry.is_dir()
-                size_str = ""
-                if not is_dir:
-                    try:
-                        sz = entry.stat().st_size
-                        size_str = f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B"
-                    except Exception:
-                        size_str = ""
-                items.append({
-                    "name": entry.name,
-                    "isDir": is_dir,
-                    "size": size_str,
-                    "icon": "📁" if is_dir else ("📄" if not entry.name.endswith(('.html', '.py', '.js')) else "⚡")
-                })
-        except Exception as e:
-            items = []
-
-        print(json.dumps({"type": "tool_done", "result": f"Found {len(items)} items in {target_dir}"}), flush=True)
-
-        formatted_lines = []
-        for it in items[:35]:
-            sz = f" *({it['size']})*" if it['size'] else ""
-            formatted_lines.append(f"- {it['icon']} **{it['name']}**{sz}")
-        formatted_items = "\n".join(formatted_lines)
-
-        final_reply = (
-            f"📁 **Directory Listing:** `{target_dir}`\n\n"
-            f"Found **{len(items)}** items:\n\n"
-            f"{formatted_items if items else '*No files found in directory.*'}"
-        )
-
-    elif matched_intent == "web_search":
-        # Extract query from prompt
-        query = prompt_text
-        for prefix in ['search the web for', 'search web for', 'search for', 'search online for',
-                        'find online', 'google search for', 'web search for', 'look up', 'find me']:
-            if prefix in prompt_lower:
-                idx = prompt_lower.index(prefix) + len(prefix)
-                query = prompt_text[idx:].strip().strip('"').strip("'")
-                break
-
-        print(json.dumps({"type": "thought", "text": f"Preparing web search for: '{query}'...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_search",
-                          "description": f"Search DuckDuckGo: '{query}'"}), flush=True)
-        await asyncio.sleep(0.3)
-
-        print(json.dumps({"type": "tool_call", "name": "web_search", "args": {"query": query}}), flush=True)
-        search_raw = web_search(query, max_results=5)
-        await asyncio.sleep(0.5)
-        search_data = json.loads(search_raw)
-        print(json.dumps({"type": "tool_done", "result": f"{search_data.get('count', 0)} results found",
-                          "extra": {"search_results": search_data.get('results', [])}}), flush=True)
-
-        results_list = search_data.get('results', [])
-        if results_list:
-            # Generate AI Summary offline
-            snippets = [r['snippet'] for r in results_list if r.get('snippet')]
-            summary = summarize_text(snippets)
+                browser_res = f"Error opening browser: {str(e)}"
             
-            lines = [f"{r['rank']}. **{r['title']}**\n   {r['snippet']}\n   🔗 {r['url']}" for r in results_list]
-            final_reply = (
-                f"🌐 **Web Search Results for:** *\"{query}\"*\n\n"
-                f"💡 **AI Summary & Insights:**\n"
-                f"{summary}\n\n"
-                f"**Top Web Results:**\n" +
-                "\n\n".join(lines)
-            )
-        else:
-            final_reply = (
-                f"🌐 **Web Search**\n\n"
-                f"No results found for *\"{query}\"*.\n"
-                f"Try a different query or check your internet connection."
-            )
-        # Also emit structured data for the UI to render as cards
-        print(json.dumps({"type": "search_results", "query": query, "results": results_list}), flush=True)
-        auto_train_intent(matched_intent, prompt_text)
-
-    elif matched_intent == "create_html":
-        # Extract title from prompt
-        title = "My Edge Go Page"
-        # Try to extract title after common prefixes
-        for prefix in ['create a', 'create an', 'make a', 'build a', 'generate a', 'design a']:
-            if prefix in prompt_lower:
-                idx = prompt_lower.index(prefix) + len(prefix)
-                title = prompt_text[idx:].strip().rstrip('.')
-                title = re.sub(r'\s+(html|page|webpage|website|landing page).*$', '', title, flags=re.I).strip().title()
-                break
-        if ':' in prompt_text:
-            parts = prompt_text.split(':', 1)
-            desc = parts[1].strip()
-        else:
-            desc = expand_topic_content(title, prompt_text)
-
-        print(json.dumps({"type": "thought", "text": f"Designing HTML page: '{title}'...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_html_designer",
-            "description": f"Design HTML: {title}"
-        }), flush=True)
-        await asyncio.sleep(0.25)
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_html_writer",
-            "description": "Write HTML + CSS structure"
-        }), flush=True)
-        await asyncio.sleep(0.25)
-
-        print(json.dumps({"type": "tool_call", "name": "create_html_page",
-                          "args": {"title": title, "body_description": desc}}), flush=True)
-        html_raw = create_html_page(title, desc)
-        await asyncio.sleep(0.4)
-        html_data = json.loads(html_raw)
-        print(json.dumps({"type": "tool_done", "result": html_data.get('file', ''),
-                          "extra": {"file": html_data.get('file'), "title": title}}), flush=True)
-
-        final_reply = (
-            f"🎨 **HTML Page Created & Opened**\n\n"
-            f"**Title:** {title}\n"
-            f"**File:** `{html_data.get('file', 'Desktop')}` \n"
-            f"**Status:** Opened in your default browser ✅\n\n"
-            f"The page uses Edge Go's premium dark theme with your content."
-        )
-        print(json.dumps({"type": "file_created", "file": html_data.get('file'), "file_type": "html", "title": title}), flush=True)
-
-    elif matched_intent == "create_presentation":
-        # Extract title from prompt
-        title = "My Clicky Presentation"
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": browser_res}), flush=True)
         
-        # Try to extract title after common prefixes
-        for prefix in ['create a presentation about', 'create presentation about', 'make presentation about', 'build presentation about', 'create a presentation on', 'create presentation on', 'make presentation on', 'build presentation on', 'create slides about', 'create slides on', 'make slides about', 'make slides on', 'slideshow about', 'slideshow on', 'slideshow for', 'presentation for']:
-            if prefix in prompt_lower:
-                idx = prompt_lower.index(prefix) + len(prefix)
-                title = prompt_text[idx:].strip().rstrip('.')
-                break
-        else:
+            final_reply = (
+                f"🌐 **Browser Session Initiated**\n\n"
+                f"Successfully launched target page in your default system browser:\n"
+                f"👉 **[{target_url}]({target_url})**"
+            )
+        
+        elif matched_intent == "instagram":
+            post_content = "Edge Go Windows Beta is live! 🚀"
+            content_match = re.search(r'(?:post|caption)[:\s]+(.+)', prompt_text, re.IGNORECASE)
+            if content_match:
+                post_content = content_match.group(1).strip()
+            
+            print(json.dumps({"type": "thought", "text": "Publishing post to Instagram simulated API feed...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Instagram Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_instagram",
+                "description": "Publish post to Instagram API",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "instagram_operation", "args": {"action": "post", "post_content": post_content}}), flush=True)
+            insta_res = instagram_operation("post", post_content)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": insta_res}), flush=True)
+        
+            final_reply = (
+                f"📸 **Instagram Operation Successful**\n\n"
+                f"Published post to simulated feed:\n"
+                f"📝 *\"{post_content}\"*\n\n"
+                f"Open your Control Center Instagram tab to view the live update."
+            )
+        
+        elif matched_intent == "whatsapp":
+            contact = "Farza"
+            message_content = "Hey Clicky! Testing the offline WhatsApp integration."
+        
+            to_match = re.search(r'(?:to|message|text)\s+([a-zA-Z0-9_]+)', prompt_text, re.IGNORECASE)
+            if to_match:
+                contact = to_match.group(1).capitalize()
+            
+            content_match = re.search(r'(?:message|text|content|saying)[:\s]+(.+)', prompt_text, re.IGNORECASE)
+            if content_match:
+                message_content = content_match.group(1).strip()
+            
+            print(json.dumps({"type": "thought", "text": f"Preparing simulated WhatsApp message to {contact}...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_whatsapp",
+                "description": f"Send WhatsApp message to {contact}",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            print(json.dumps({"type": "tool_call", "name": "whatsapp_operation", "args": {"action": "send", "contact": contact, "message": message_content}}), flush=True)
+            whatsapp_res = whatsapp_operation("send", contact, message_content)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": whatsapp_res}), flush=True)
+        
+            final_reply = (
+                f"🟢 **WhatsApp Message Sent**\n\n"
+                f"Recipient: `{contact}`\n"
+                f"Message: *\"{message_content}\"*\n\n"
+                f"Your docked Agent Bar has been updated with the sent message."
+            )
+        
+        elif matched_intent == "screenshot":
+            print(json.dumps({"type": "thought", "text": "Capturing display geometry metrics...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Screen Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_screen",
+                "description": "Capture display geometry",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "capture_screen", "args": {}}), flush=True)
+            screen_res = capture_screen()
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": screen_res}), flush=True)
+        
+            final_reply = (
+                f"🖥️ **Screen Captured Successfully**\n\n"
+                f"Main display properties:\n"
+                f"```json\n{screen_res}\n```"
+            )
+        
+        elif matched_intent == "help":
+            final_reply = (
+                "👋 **Hello! I am Clicky — Edge Go Agent**\n\n"
+                "I run completely on your machine. Here's everything I can do:\n\n"
+                "1. 🎯 **Coordinate Clicking**\n"
+                "   *'click at 700 500'* — moves cursor & performs real click\n\n"
+                "2. 📁 **Terminal & Git**\n"
+                "   *'show git status'* / *'run git log'* — executes real shell commands\n\n"
+                "3. 🌐 **Web Search** (no API key)\n"
+                "   *'search the web for Python tutorials'* — DuckDuckGo results\n\n"
+                "4. 📄 **Create HTML Pages**\n"
+                "   *'create a landing page for my portfolio'* — generates & opens in browser\n\n"
+                "5. 📊 **Create Slides / Presentations**\n"
+                "   *'create a presentation about machine learning'* — generates interactive slideshow\n\n"
+                "6. 📝 **Create Documents**\n"
+                "   *'create a document: outline.txt'* — generates & opens document\n\n"
+                "7. ▶️ **Play Videos in Browser**\n"
+                "   *'play lofi music on YouTube in Brave'* / *'open Netflix in Edge'*\n\n"
+                "8. 🖥️ **Microsoft App Integration**\n"
+                "   *'open OneNote'* / *'open Word'* / *'launch Excel'*\n\n"
+                "8. 🤖 **Multi-Agent Orchestration**\n"
+                "   *'orchestrate agents to research and write a report'*\n\n"
+                "9. 🔍 **Workspace QA Search**\n"
+                "   *'what is clicky?'* — searches your local codebase docs\n\n"
+                "10. 🎙️ **Voice Wake Word**\n"
+                "    Say *'Hey Clicky'* — I start listening for your command"
+            )
+
+        # ══════════════════════════════════════════════════════════════
+        # NEW INTENT BRANCHES
+        # ══════════════════════════════════════════════════════════════
+
+        elif matched_intent == "launch_exe":
+            print(json.dumps({"type": "thought", "text": f"Preparing executable program launcher for: '{prompt_text}'...\n"}), flush=True)
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_exe", "description": "Launch Executable Program"}), flush=True)
+            print(json.dumps({"type": "tool_call", "name": "launch_executable", "args": {"prompt": prompt_text}}), flush=True)
+
+            # Extract path if explicit path mentioned
+            matched_path = None
+            for word in prompt_text.split():
+                if word.lower().endswith(('.exe', '.cmd', '.bat', '.app', '.lnk')) or '\\' in word or '/' in word:
+                    matched_path = word.strip('"').strip("'")
+                    break
+
+            if matched_path and os.path.exists(matched_path):
+                try:
+                    if IS_WINDOWS:
+                        subprocess.Popen(f'start "" "{matched_path}"', shell=True)
+                    else:
+                        subprocess.Popen(['open', matched_path])
+                    print(json.dumps({"type": "tool_done", "result": f"Launched executable: {matched_path}"}), flush=True)
+                    final_reply = f"🚀 **Executable Launched Successfully!**\n\nProgram path: `{matched_path}`"
+                except Exception as e:
+                    print(json.dumps({"type": "tool_done", "result": f"Execution error: {str(e)}"}), flush=True)
+                    final_reply = f"⚠️ **Executable Launch Failed:** {str(e)}"
+            else:
+                print(json.dumps({"type": "tool_done", "result": "Triggering Windows File Explorer launcher dialog"}), flush=True)
+                final_reply = (
+                    f"🚀 **Program Launcher Active**\n\n"
+                    f"Use the **'🚀 Load .exe Program'** button in the Notch Sync Bridge or Agent Panel to select any executable (`.exe`) file from File Explorer!"
+                )
+
+        elif matched_intent == "list_files":
+            print(json.dumps({"type": "thought", "text": f"Scanning directory contents for: '{prompt_text}'...\n"}), flush=True)
+
+            target_dir = REPO_ROOT
+            p_lower = prompt_lower
+            if 'desktop' in p_lower:
+                target_dir = str(DESKTOP_PATH)
+            elif 'document' in p_lower:
+                target_dir = str(DOCUMENTS_PATH)
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_list", "description": f"Scan directory: '{os.path.basename(target_dir)}'"}), flush=True)
+            print(json.dumps({"type": "tool_call", "name": "list_directory", "args": {"path": target_dir}}), flush=True)
+
+            items = []
+            try:
+                entries = list(os.scandir(target_dir))
+                entries.sort(key=lambda e: (not e.is_dir(), e.name.lower()))
+                for entry in entries:
+                    if entry.name.startswith('.'): continue
+                    is_dir = entry.is_dir()
+                    size_str = ""
+                    if not is_dir:
+                        try:
+                            sz = entry.stat().st_size
+                            size_str = f"{sz / 1024:.1f} KB" if sz >= 1024 else f"{sz} B"
+                        except Exception:
+                            size_str = ""
+                    items.append({
+                        "name": entry.name,
+                        "isDir": is_dir,
+                        "size": size_str,
+                        "icon": "📁" if is_dir else ("📄" if not entry.name.endswith(('.html', '.py', '.js')) else "⚡")
+                    })
+            except Exception as e:
+                items = []
+
+            print(json.dumps({"type": "tool_done", "result": f"Found {len(items)} items in {target_dir}"}), flush=True)
+
+            formatted_lines = []
+            for it in items[:35]:
+                sz = f" *({it['size']})*" if it['size'] else ""
+                formatted_lines.append(f"- {it['icon']} **{it['name']}**{sz}")
+            formatted_items = "\n".join(formatted_lines)
+
+            final_reply = (
+                f"📁 **Directory Listing:** `{target_dir}`\n\n"
+                f"Found **{len(items)}** items:\n\n"
+                f"{formatted_items if items else '*No files found in directory.*'}"
+            )
+
+        elif matched_intent == "web_search":
+            # Extract query from prompt
+            query = prompt_text
+            for prefix in ['search the web for', 'search web for', 'search for', 'search online for',
+                            'find online', 'google search for', 'web search for', 'look up', 'find me']:
+                if prefix in prompt_lower:
+                    idx = prompt_lower.index(prefix) + len(prefix)
+                    query = prompt_text[idx:].strip().strip('"').strip("'")
+                    break
+
+            print(json.dumps({"type": "thought", "text": f"Preparing web search for: '{query}'...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_search",
+                              "description": f"Search DuckDuckGo: '{query}'"}), flush=True)
+            await asyncio.sleep(0.3)
+
+            print(json.dumps({"type": "tool_call", "name": "web_search", "args": {"query": query}}), flush=True)
+            search_raw = web_search(query, max_results=5)
+            await asyncio.sleep(0.5)
+            search_data = json.loads(search_raw)
+            print(json.dumps({"type": "tool_done", "result": f"{search_data.get('count', 0)} results found",
+                              "extra": {"search_results": search_data.get('results', [])}}), flush=True)
+
+            results_list = search_data.get('results', [])
+            if results_list:
+                # Generate AI Summary offline
+                snippets = [r['snippet'] for r in results_list if r.get('snippet')]
+                summary = summarize_text(snippets)
+            
+                lines = [f"{r['rank']}. **{r['title']}**\n   {r['snippet']}\n   🔗 {r['url']}" for r in results_list]
+                final_reply = (
+                    f"🌐 **Web Search Results for:** *\"{query}\"*\n\n"
+                    f"💡 **AI Summary & Insights:**\n"
+                    f"{summary}\n\n"
+                    f"**Top Web Results:**\n" +
+                    "\n\n".join(lines)
+                )
+            else:
+                final_reply = (
+                    f"🌐 **Web Search**\n\n"
+                    f"No results found for *\"{query}\"*.\n"
+                    f"Try a different query or check your internet connection."
+                )
+            # Also emit structured data for the UI to render as cards
+            print(json.dumps({"type": "search_results", "query": query, "results": results_list}), flush=True)
+            auto_train_intent(matched_intent, prompt_text)
+
+        elif matched_intent == "create_html":
+            # Extract title from prompt
+            title = "My Edge Go Page"
+            # Try to extract title after common prefixes
             for prefix in ['create a', 'create an', 'make a', 'build a', 'generate a', 'design a']:
                 if prefix in prompt_lower:
                     idx = prompt_lower.index(prefix) + len(prefix)
                     title = prompt_text[idx:].strip().rstrip('.')
-                    title = re.sub(r'\s+(presentation|slideshow|slides|powerpoint).*$', '', title, flags=re.I).strip().title()
+                    title = re.sub(r'\s+(html|page|webpage|website|landing page).*$', '', title, flags=re.I).strip().title()
+                    break
+            if ':' in prompt_text:
+                parts = prompt_text.split(':', 1)
+                desc = parts[1].strip()
+            else:
+                desc = expand_topic_content(title, prompt_text)
+
+            print(json.dumps({"type": "thought", "text": f"Designing HTML page: '{title}'...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_html_designer",
+                "description": f"Design HTML: {title}"
+            }), flush=True)
+            await asyncio.sleep(0.25)
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_html_writer",
+                "description": "Write HTML + CSS structure"
+            }), flush=True)
+            await asyncio.sleep(0.25)
+
+            print(json.dumps({"type": "tool_call", "name": "create_html_page",
+                              "args": {"title": title, "body_description": desc}}), flush=True)
+            html_raw = create_html_page(title, desc)
+            await asyncio.sleep(0.4)
+            html_data = json.loads(html_raw)
+            print(json.dumps({"type": "tool_done", "result": html_data.get('file', ''),
+                              "extra": {"file": html_data.get('file'), "title": title}}), flush=True)
+
+            final_reply = (
+                f"🎨 **HTML Page Created & Opened**\n\n"
+                f"**Title:** {title}\n"
+                f"**File:** `{html_data.get('file', 'Desktop')}` \n"
+                f"**Status:** Opened in your default browser ✅\n\n"
+                f"The page uses Edge Go's premium dark theme with your content."
+            )
+            print(json.dumps({"type": "file_created", "file": html_data.get('file'), "file_type": "html", "title": title}), flush=True)
+
+        elif matched_intent == "create_presentation":
+            # Extract title from prompt
+            title = "My Clicky Presentation"
+        
+            # Try to extract title after common prefixes
+            for prefix in ['create a presentation about', 'create presentation about', 'make presentation about', 'build presentation about', 'create a presentation on', 'create presentation on', 'make presentation on', 'build presentation on', 'create slides about', 'create slides on', 'make slides about', 'make slides on', 'slideshow about', 'slideshow on', 'slideshow for', 'presentation for']:
+                if prefix in prompt_lower:
+                    idx = prompt_lower.index(prefix) + len(prefix)
+                    title = prompt_text[idx:].strip().rstrip('.')
+                    break
+            else:
+                for prefix in ['create a', 'create an', 'make a', 'build a', 'generate a', 'design a']:
+                    if prefix in prompt_lower:
+                        idx = prompt_lower.index(prefix) + len(prefix)
+                        title = prompt_text[idx:].strip().rstrip('.')
+                        title = re.sub(r'\s+(presentation|slideshow|slides|powerpoint).*$', '', title, flags=re.I).strip().title()
+                        break
+
+            if ':' in prompt_text:
+                parts = prompt_text.split(':', 1)
+                desc = parts[1].strip()
+            else:
+                desc = expand_topic_content(title, prompt_text)
+
+            print(json.dumps({"type": "thought", "text": f"Designing interactive slideshow presentation: '{title}'...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_presentation_designer",
+                "description": f"Outline slides for: {title}"
+            }), flush=True)
+            await asyncio.sleep(0.25)
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_presentation_writer",
+                "description": "Compose slide contents and transitions"
+            }), flush=True)
+            await asyncio.sleep(0.25)
+
+            print(json.dumps({"type": "tool_call", "name": "create_presentation_page",
+                              "args": {"title": title, "topic_description": desc}}), flush=True)
+            pres_raw = create_presentation_page(title, desc)
+            await asyncio.sleep(0.4)
+            pres_data = json.loads(pres_raw)
+            print(json.dumps({"type": "tool_done", "result": pres_data.get('file', ''),
+                              "extra": {"file": pres_data.get('file'), "title": title}}), flush=True)
+
+            final_reply = (
+                f"📊 **Interactive Presentation Slides Created & Opened**\n\n"
+                f"**Title:** {title}\n"
+                f"**File:** `{pres_data.get('file', 'Desktop')}` \n"
+                f"**Status:** Opened in your default browser ✅\n\n"
+                f"Use the **Left/Right arrow keys**, **Spacebar**, or the on-screen buttons to navigate through the slides."
+            )
+            print(json.dumps({"type": "file_created", "file": pres_data.get('file'), "file_type": "html", "title": title}), flush=True)
+
+        elif matched_intent == "create_document":
+            # Determine doc type from prompt
+            doc_type = 'txt'
+            if any(k in prompt_lower for k in ['excel', 'spreadsheet', 'xlsx']):
+                doc_type = 'xlsx'
+            elif any(k in prompt_lower for k in ['word', 'docx', '.doc']):
+                doc_type = 'docx'
+            elif any(k in prompt_lower for k in ['csv', 'comma separated']):
+                doc_type = 'csv'
+            elif any(k in prompt_lower for k in ['markdown', '.md']):
+                doc_type = 'md'
+            elif any(k in prompt_lower for k in ['python', '.py']):
+                doc_type = 'py'
+            elif any(k in prompt_lower for k in ['html', 'webpage']):
+                doc_type = 'html'
+
+            # Extract filename/title
+            filename = 'clicky_document'
+            for prefix in ['create a', 'create an', 'make a', 'write a', 'generate a']:
+                if prefix in prompt_lower:
+                    idx = prompt_lower.index(prefix) + len(prefix)
+                    raw = prompt_text[idx:].strip()
+                    # Remove type words
+                    raw = re.sub(r'\b(word|excel|text|markdown|csv|document|doc|file|spreadsheet|page|script)\b', '', raw, flags=re.I)
+                    filename = re.sub(r'[^a-zA-Z0-9 _-]', '', raw).strip().replace(' ', '_')[:40]
+                    break
+            if not filename:
+                filename = 'clicky_document'
+
+            # Check if the user is asking to search and write/compile into a doc
+            is_search_write = False
+            search_query = None
+        
+            if any(k in prompt_lower for k in ['search', 'find online', 'look up', 'google', 'query']):
+                search_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)([\w\s\-_.]+?)\s+(?:and\s+)?(create|make|save|write|compile|export)', prompt_text, re.IGNORECASE)
+                if search_match:
+                    search_query = search_match.group(2).strip().strip('"').strip("'")
+                    is_search_write = True
+                else:
+                    parts = re.split(r'\b(?:and\s+)?(?:create|make|save|write|compile|export)\b', prompt_text, flags=re.I)
+                    if len(parts) > 1:
+                        sq_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(?:for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)(.+)', parts[0], re.IGNORECASE)
+                        if sq_match:
+                            search_query = sq_match.group(1).strip()
+                            is_search_write = True
+
+            import datetime
+            summary = ""
+        
+            if is_search_write and search_query:
+                print(json.dumps({"type": "thought", "text": f"Combined workflow detected. Initiating web search for: '{search_query}'...\n"}), flush=True)
+                await asyncio.sleep(0.25)
+            
+                # Spawn search subagent
+                print(json.dumps({"type": "subagent_start", "id": "sub_search", "description": f"🔍 Search: '{search_query}'"}), flush=True)
+                await asyncio.sleep(0.3)
+            
+                # Search DDG/Bing
+                print(json.dumps({"type": "tool_call", "name": "web_search", "args": {"query": search_query}}), flush=True)
+                search_raw = web_search(search_query, max_results=5)
+                await asyncio.sleep(0.4)
+                search_data = json.loads(search_raw)
+                results_list = search_data.get('results', [])
+                print(json.dumps({"type": "tool_done", "result": f"Found {len(results_list)} sources"}), flush=True)
+            
+                # Summarize results
+                print(json.dumps({"type": "thought", "text": "Analysing search results and compiling AI summary report...\n"}), flush=True)
+                await asyncio.sleep(0.3)
+                print(json.dumps({"type": "subagent_start", "id": "sub_summary", "description": "🔬 AI Analyst: Summarize search results"}), flush=True)
+                await asyncio.sleep(0.4)
+            
+                snippets = [r['snippet'] for r in results_list if r.get('snippet')]
+                summary = summarize_text(snippets)
+                print(json.dumps({"type": "tool_done", "result": "AI Summary generated successfully"}), flush=True)
+            
+                # Format report content
+                if doc_type == 'xlsx' or doc_type == 'csv':
+                    content_lines = ["Rank,Title,Snippet,URL"]
+                    for r in results_list:
+                        t_safe = r['title'].replace(',', ' ').replace('\n', ' ')
+                        s_safe = r['snippet'].replace(',', ' ').replace('\n', ' ')
+                        content_lines.append(f"{r['rank']},{t_safe},{s_safe},{r['url']}")
+                    content_lines.append("")
+                    content_lines.append(f"AI Summary,{summary.replace(',', ' ').replace('\n', ' ')},,")
+                    content = "\n".join(content_lines)
+                else:
+                    report = []
+                    report.append(f"# Search & Analysis Report: {search_query.title()}")
+                    report.append(f"Generated by Clicky Offline AI Agent on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                    report.append("## Executive Summary")
+                    report.append(summary)
+                    report.append("\n## Top Web Search Findings")
+                    for r in results_list:
+                        report.append(f"{r['rank']}. **{r['title']}**")
+                        report.append(f"   *Snippet:* {r['snippet']}")
+                        report.append(f"   *Source:* {r['url']}\n")
+                    content = "\n".join(report)
+            else:
+                if ':' in prompt_text:
+                    content = prompt_text.split(':', 1)[1].strip()
+                else:
+                    title_for_doc = filename.replace('_', ' ').title()
+                    content = expand_topic_content(title_for_doc, prompt_text)
+
+            print(json.dumps({"type": "thought", "text": f"Writing {doc_type.upper()} document: '{filename}'...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_doc_creator",
+                              "description": f"Create {doc_type.upper()}: {filename}"}), flush=True)
+            await asyncio.sleep(0.3)
+
+            print(json.dumps({"type": "tool_call", "name": "create_document",
+                              "args": {"filename": filename, "content": content, "doc_type": doc_type}}), flush=True)
+            doc_raw = create_document(filename, content, doc_type)
+            await asyncio.sleep(0.4)
+            doc_data = json.loads(doc_raw)
+            print(json.dumps({"type": "tool_done", "result": doc_data.get('file', ''),
+                              "extra": {"file": doc_data.get('file'), "type": doc_type}}), flush=True)
+
+            if is_search_write and search_query:
+                final_reply = (
+                    f"📄 **AI Report Compiled Successfully**\n\n"
+                    f"**Topic:** {search_query.title()}\n"
+                    f"**Format:** {doc_type.upper()}\n"
+                    f"**File:** `{doc_data.get('file')}` ✅\n\n"
+                    f"💡 **AI Summary & Highlights:**\n"
+                    f"{summary}\n\n"
+                    f"All search findings have been compiled into the file."
+                )
+            else:
+                final_reply = (
+                    f"📄 **Document Created**\n\n"
+                    f"**Type:** {doc_type.upper()}\n"
+                    f"**File:** `{doc_data.get('file', 'Documents folder')}` \n"
+                    f"**Size:** {doc_data.get('size_bytes', 0)} bytes\n"
+                    f"**Status:** Opened with default application ✅"
+                )
+            print(json.dumps({"type": "file_created", "file": doc_data.get('file'), "file_type": doc_type}), flush=True)
+
+        elif matched_intent == "play_video":
+            # Detect browser
+            browser = 'default'
+            for b in ['brave', 'chrome', 'edge', 'firefox', 'opera']:
+                if b in prompt_lower:
+                    browser = b
+                    break
+            if 'microsoft edge' in prompt_lower:
+                browser = 'edge'
+
+            # Extract query
+            query = prompt_text
+            for prefix in ['play video', 'play music', 'watch video', 'open youtube', 'play', 'watch']:
+                if prefix in prompt_lower:
+                    idx = prompt_lower.index(prefix) + len(prefix)
+                    raw = prompt_text[idx:].strip()
+                    # Remove browser mentions
+                    for b in ['in brave', 'in chrome', 'in edge', 'in firefox', 'on brave', 'on chrome', 'on edge', 'from brave', 'from chrome', 'from edge', 'from microsoft', 'on youtube']:
+                        raw = raw.replace(b, '').replace(b.title(), '')
+                    query = raw.strip()
+                    break
+            if not query or query in ['', 'video', 'music']:
+                query = 'lofi hip hop music'
+
+            print(json.dumps({"type": "thought", "text": f"Opening '{query}' in {browser}...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_video",
+                              "description": f"Launch {browser.title()} → YouTube"}), flush=True)
+            await asyncio.sleep(0.3)
+
+            print(json.dumps({"type": "tool_call", "name": "play_video_in_browser",
+                              "args": {"query_or_url": query, "browser": browser}}), flush=True)
+            vid_raw = play_video_in_browser(query, browser)
+            await asyncio.sleep(0.4)
+            vid_data = json.loads(vid_raw)
+            print(json.dumps({"type": "tool_done", "result": vid_data.get('url', ''),
+                              "extra": {"url": vid_data.get('url'), "browser": browser}}), flush=True)
+
+            final_reply = (
+                f"▶️ **Video Launched**\n\n"
+                f"**Query:** {query}\n"
+                f"**Browser:** {browser.title()}\n"
+                f"**URL:** {vid_data.get('url', 'YouTube')} ✅"
+            )
+
+        elif matched_intent == "microsoft_app":
+            # Extract app name
+            app_name = 'notepad'
+            for app in ['word', 'excel', 'onenote', 'outlook', 'teams', 'powerpoint', 'paint', 'notepad', 'calculator', 'explorer', 'sticky']:
+                if app in prompt_lower:
+                    app_name = app
                     break
 
-        if ':' in prompt_text:
-            parts = prompt_text.split(':', 1)
-            desc = parts[1].strip()
-        else:
-            desc = expand_topic_content(title, prompt_text)
-
-        print(json.dumps({"type": "thought", "text": f"Designing interactive slideshow presentation: '{title}'...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_presentation_designer",
-            "description": f"Outline slides for: {title}"
-        }), flush=True)
-        await asyncio.sleep(0.25)
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_presentation_writer",
-            "description": "Compose slide contents and transitions"
-        }), flush=True)
-        await asyncio.sleep(0.25)
-
-        print(json.dumps({"type": "tool_call", "name": "create_presentation_page",
-                          "args": {"title": title, "topic_description": desc}}), flush=True)
-        pres_raw = create_presentation_page(title, desc)
-        await asyncio.sleep(0.4)
-        pres_data = json.loads(pres_raw)
-        print(json.dumps({"type": "tool_done", "result": pres_data.get('file', ''),
-                          "extra": {"file": pres_data.get('file'), "title": title}}), flush=True)
-
-        final_reply = (
-            f"📊 **Interactive Presentation Slides Created & Opened**\n\n"
-            f"**Title:** {title}\n"
-            f"**File:** `{pres_data.get('file', 'Desktop')}` \n"
-            f"**Status:** Opened in your default browser ✅\n\n"
-            f"Use the **Left/Right arrow keys**, **Spacebar**, or the on-screen buttons to navigate through the slides."
-        )
-        print(json.dumps({"type": "file_created", "file": pres_data.get('file'), "file_type": "html", "title": title}), flush=True)
-
-    elif matched_intent == "create_document":
-        # Determine doc type from prompt
-        doc_type = 'txt'
-        if any(k in prompt_lower for k in ['excel', 'spreadsheet', 'xlsx']):
-            doc_type = 'xlsx'
-        elif any(k in prompt_lower for k in ['word', 'docx', '.doc']):
-            doc_type = 'docx'
-        elif any(k in prompt_lower for k in ['csv', 'comma separated']):
-            doc_type = 'csv'
-        elif any(k in prompt_lower for k in ['markdown', '.md']):
-            doc_type = 'md'
-        elif any(k in prompt_lower for k in ['python', '.py']):
-            doc_type = 'py'
-        elif any(k in prompt_lower for k in ['html', 'webpage']):
-            doc_type = 'html'
-
-        # Extract filename/title
-        filename = 'clicky_document'
-        for prefix in ['create a', 'create an', 'make a', 'write a', 'generate a']:
-            if prefix in prompt_lower:
-                idx = prompt_lower.index(prefix) + len(prefix)
-                raw = prompt_text[idx:].strip()
-                # Remove type words
-                raw = re.sub(r'\b(word|excel|text|markdown|csv|document|doc|file|spreadsheet|page|script)\b', '', raw, flags=re.I)
-                filename = re.sub(r'[^a-zA-Z0-9 _-]', '', raw).strip().replace(' ', '_')[:40]
-                break
-        if not filename:
-            filename = 'clicky_document'
-
-        # Check if the user is asking to search and write/compile into a doc
-        is_search_write = False
-        search_query = None
-        
-        if any(k in prompt_lower for k in ['search', 'find online', 'look up', 'google', 'query']):
-            search_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)([\w\s\-_.]+?)\s+(?:and\s+)?(create|make|save|write|compile|export)', prompt_text, re.IGNORECASE)
-            if search_match:
-                search_query = search_match.group(2).strip().strip('"').strip("'")
-                is_search_write = True
-            else:
-                parts = re.split(r'\b(?:and\s+)?(?:create|make|save|write|compile|export)\b', prompt_text, flags=re.I)
-                if len(parts) > 1:
-                    sq_match = re.search(r'(?:search\s+(?:the\s+web\s+)?(?:for\s+)?|find\s+online\s+|look\s+up\s+|google\s+)(.+)', parts[0], re.IGNORECASE)
-                    if sq_match:
-                        search_query = sq_match.group(1).strip()
-                        is_search_write = True
-
-        import datetime
-        summary = ""
-        
-        if is_search_write and search_query:
-            print(json.dumps({"type": "thought", "text": f"Combined workflow detected. Initiating web search for: '{search_query}'...\n"}), flush=True)
-            await asyncio.sleep(0.25)
-            
-            # Spawn search subagent
-            print(json.dumps({"type": "subagent_start", "id": "sub_search", "description": f"🔍 Search: '{search_query}'"}), flush=True)
-            await asyncio.sleep(0.3)
-            
-            # Search DDG/Bing
-            print(json.dumps({"type": "tool_call", "name": "web_search", "args": {"query": search_query}}), flush=True)
-            search_raw = web_search(search_query, max_results=5)
-            await asyncio.sleep(0.4)
-            search_data = json.loads(search_raw)
-            results_list = search_data.get('results', [])
-            print(json.dumps({"type": "tool_done", "result": f"Found {len(results_list)} sources"}), flush=True)
-            
-            # Summarize results
-            print(json.dumps({"type": "thought", "text": "Analysing search results and compiling AI summary report...\n"}), flush=True)
-            await asyncio.sleep(0.3)
-            print(json.dumps({"type": "subagent_start", "id": "sub_summary", "description": "🔬 AI Analyst: Summarize search results"}), flush=True)
-            await asyncio.sleep(0.4)
-            
-            snippets = [r['snippet'] for r in results_list if r.get('snippet')]
-            summary = summarize_text(snippets)
-            print(json.dumps({"type": "tool_done", "result": "AI Summary generated successfully"}), flush=True)
-            
-            # Format report content
-            if doc_type == 'xlsx' or doc_type == 'csv':
-                content_lines = ["Rank,Title,Snippet,URL"]
-                for r in results_list:
-                    t_safe = r['title'].replace(',', ' ').replace('\n', ' ')
-                    s_safe = r['snippet'].replace(',', ' ').replace('\n', ' ')
-                    content_lines.append(f"{r['rank']},{t_safe},{s_safe},{r['url']}")
-                content_lines.append("")
-                content_lines.append(f"AI Summary,{summary.replace(',', ' ').replace('\n', ' ')},,")
-                content = "\n".join(content_lines)
-            else:
-                report = []
-                report.append(f"# Search & Analysis Report: {search_query.title()}")
-                report.append(f"Generated by Clicky Offline AI Agent on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-                report.append("## Executive Summary")
-                report.append(summary)
-                report.append("\n## Top Web Search Findings")
-                for r in results_list:
-                    report.append(f"{r['rank']}. **{r['title']}**")
-                    report.append(f"   *Snippet:* {r['snippet']}")
-                    report.append(f"   *Source:* {r['url']}\n")
-                content = "\n".join(report)
-        else:
+            # Content after colon
+            content = ''
             if ':' in prompt_text:
                 content = prompt_text.split(':', 1)[1].strip()
-            else:
-                title_for_doc = filename.replace('_', ' ').title()
-                content = expand_topic_content(title_for_doc, prompt_text)
 
-        print(json.dumps({"type": "thought", "text": f"Writing {doc_type.upper()} document: '{filename}'...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_doc_creator",
-                          "description": f"Create {doc_type.upper()}: {filename}"}), flush=True)
-        await asyncio.sleep(0.3)
-
-        print(json.dumps({"type": "tool_call", "name": "create_document",
-                          "args": {"filename": filename, "content": content, "doc_type": doc_type}}), flush=True)
-        doc_raw = create_document(filename, content, doc_type)
-        await asyncio.sleep(0.4)
-        doc_data = json.loads(doc_raw)
-        print(json.dumps({"type": "tool_done", "result": doc_data.get('file', ''),
-                          "extra": {"file": doc_data.get('file'), "type": doc_type}}), flush=True)
-
-        if is_search_write and search_query:
-            final_reply = (
-                f"📄 **AI Report Compiled Successfully**\n\n"
-                f"**Topic:** {search_query.title()}\n"
-                f"**Format:** {doc_type.upper()}\n"
-                f"**File:** `{doc_data.get('file')}` ✅\n\n"
-                f"💡 **AI Summary & Highlights:**\n"
-                f"{summary}\n\n"
-                f"All search findings have been compiled into the file."
-            )
-        else:
-            final_reply = (
-                f"📄 **Document Created**\n\n"
-                f"**Type:** {doc_type.upper()}\n"
-                f"**File:** `{doc_data.get('file', 'Documents folder')}` \n"
-                f"**Size:** {doc_data.get('size_bytes', 0)} bytes\n"
-                f"**Status:** Opened with default application ✅"
-            )
-        print(json.dumps({"type": "file_created", "file": doc_data.get('file'), "file_type": doc_type}), flush=True)
-
-    elif matched_intent == "play_video":
-        # Detect browser
-        browser = 'default'
-        for b in ['brave', 'chrome', 'edge', 'firefox', 'opera']:
-            if b in prompt_lower:
-                browser = b
-                break
-        if 'microsoft edge' in prompt_lower:
-            browser = 'edge'
-
-        # Extract query
-        query = prompt_text
-        for prefix in ['play video', 'play music', 'watch video', 'open youtube', 'play', 'watch']:
-            if prefix in prompt_lower:
-                idx = prompt_lower.index(prefix) + len(prefix)
-                raw = prompt_text[idx:].strip()
-                # Remove browser mentions
-                for b in ['in brave', 'in chrome', 'in edge', 'in firefox', 'on brave', 'on chrome', 'on edge', 'from brave', 'from chrome', 'from edge', 'from microsoft', 'on youtube']:
-                    raw = raw.replace(b, '').replace(b.title(), '')
-                query = raw.strip()
-                break
-        if not query or query in ['', 'video', 'music']:
-            query = 'lofi hip hop music'
-
-        print(json.dumps({"type": "thought", "text": f"Opening '{query}' in {browser}...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_video",
-                          "description": f"Launch {browser.title()} → YouTube"}), flush=True)
-        await asyncio.sleep(0.3)
-
-        print(json.dumps({"type": "tool_call", "name": "play_video_in_browser",
-                          "args": {"query_or_url": query, "browser": browser}}), flush=True)
-        vid_raw = play_video_in_browser(query, browser)
-        await asyncio.sleep(0.4)
-        vid_data = json.loads(vid_raw)
-        print(json.dumps({"type": "tool_done", "result": vid_data.get('url', ''),
-                          "extra": {"url": vid_data.get('url'), "browser": browser}}), flush=True)
-
-        final_reply = (
-            f"▶️ **Video Launched**\n\n"
-            f"**Query:** {query}\n"
-            f"**Browser:** {browser.title()}\n"
-            f"**URL:** {vid_data.get('url', 'YouTube')} ✅"
-        )
-
-    elif matched_intent == "microsoft_app":
-        # Extract app name
-        app_name = 'notepad'
-        for app in ['word', 'excel', 'onenote', 'outlook', 'teams', 'powerpoint', 'paint', 'notepad', 'calculator', 'explorer', 'sticky']:
-            if app in prompt_lower:
-                app_name = app
-                break
-
-        # Content after colon
-        content = ''
-        if ':' in prompt_text:
-            content = prompt_text.split(':', 1)[1].strip()
-
-        print(json.dumps({"type": "thought", "text": f"Launching {app_name.title()}...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        print(json.dumps({"type": "subagent_start", "id": "sub_ms",
-                          "description": f"Launch Microsoft {app_name.title()}"}), flush=True)
-        await asyncio.sleep(0.3)
-
-        print(json.dumps({"type": "tool_call", "name": "open_microsoft_app",
-                          "args": {"app": app_name, "content": content}}), flush=True)
-        ms_raw = open_microsoft_app(app_name, content)
-        await asyncio.sleep(0.4)
-        ms_data = json.loads(ms_raw)
-        print(json.dumps({"type": "tool_done", "result": ms_data.get('status', ''),
-                          "extra": {"app": ms_data.get('app'), "method": ms_data.get('method')}}), flush=True)
-
-        final_reply = (
-            f"🖥️ **Microsoft App Launched**\n\n"
-            f"**App:** {ms_data.get('app', app_name.title())}\n"
-            f"**Method:** {ms_data.get('method', 'shell')}\n"
-            f"**Status:** {ms_data.get('status', 'launched')} ✅"
-            + (f"\n**File:** `{ms_data.get('file')}`" if ms_data.get('file') else "")
-        )
-
-    elif matched_intent == "multi_agent":
-        print(json.dumps({"type": "thought", "text": "Analyzing task complexity and planning agent pipeline...\n"}), flush=True)
-        await asyncio.sleep(0.3)
-
-        pipeline = multi_agent_orchestrate(prompt_text)
-        agent_outputs = []
-
-        print(json.dumps({"type": "thought",
-                          "text": f"Spawning {len(pipeline)}-agent pipeline: {' → '.join(t for t, _ in pipeline)}\n"}), flush=True)
-        await asyncio.sleep(0.2)
-
-        for i, (agent_type, task_desc) in enumerate(pipeline):
-            icon, agent_name = SUB_AGENT_TYPES.get(agent_type, ('🤖', agent_type.title()))
-            print(json.dumps({"type": "subagent_start",
-                              "id": f"sub_{agent_type}_{i}",
-                              "description": f"{icon} {agent_name}",
-                              "agent_type": agent_type}), flush=True)
-            await asyncio.sleep(0.4)
-
-            # Simulate agent work
-            if agent_type == 'researcher':
-                query = re.sub(r'^(research:|find:|look up:?)\s*', '', task_desc, flags=re.I).strip()
-                print(json.dumps({"type": "tool_call", "name": "web_search",
-                                  "args": {"query": query}}), flush=True)
-                raw = web_search(query, max_results=3)
-                data = json.loads(raw)
-                results = data.get('results', [])
-                output = f"Found {len(results)} web sources"
-                agent_outputs.append(f"🔬 Research: {len(results)} sources found for '{query}'")
-            elif agent_type == 'creator':
-                print(json.dumps({"type": "tool_call", "name": "create_html_page",
-                                  "args": {"title": prompt_text[:40], "body_description": prompt_text}}), flush=True)
-                raw = create_html_page(prompt_text[:40].title(), prompt_text)
-                data = json.loads(raw)
-                output = f"Created: {data.get('file', 'file')}"
-                agent_outputs.append(f"🎨 Created: `{data.get('file', 'artifact')}`")
-            elif agent_type == 'writer':
-                print(json.dumps({"type": "tool_call", "name": "create_document",
-                                  "args": {"filename": "agent_report", "content": prompt_text, "doc_type": "md"}}), flush=True)
-                raw = create_document('agent_report', f"# Task Report\n\n{prompt_text}\n\n*Generated by Clicky Multi-Agent Pipeline*", 'md')
-                data = json.loads(raw)
-                output = f"Document: {data.get('file', '')}"
-                agent_outputs.append(f"✍️ Written: `{data.get('file', 'report.md')}`")
-            elif agent_type == 'executor':
-                print(json.dumps({"type": "tool_call", "name": "run_command",
-                                  "args": {"CommandLine": "echo Agent task executed"}}), flush=True)
-                output = run_command("echo Agent task executed")
-                agent_outputs.append(f"⚡ Executed system task")
-            elif agent_type == 'analyst':
-                output = "Analysis complete: task parameters validated"
-                agent_outputs.append(f"📊 Analysis: parameters validated")
-            else:  # reviewer
-                output = "All agent outputs consolidated"
-                agent_outputs.append(f"🔍 Review: pipeline consolidated")
-
-            await asyncio.sleep(0.3)
-            print(json.dumps({"type": "tool_done", "result": output}), flush=True)
-
-        final_reply = (
-            f"🤖 **Multi-Agent Pipeline Complete**\n\n"
-            f"**Task:** {prompt_text}\n"
-            f"**Agents Run:** {len(pipeline)}\n\n"
-            f"**Pipeline Results:**\n" +
-            "\n".join(f"  {r}" for r in agent_outputs) +
-            "\n\n✅ All agents finished successfully."
-        )
-
-    elif matched_intent == "volume_control":
-        # Parse direction & amount
-        direction = 'up'
-        amount = 10
-        
-        if 'unmute' in prompt_lower:
-            direction = 'unmute'
-        elif 'mute' in prompt_lower:
-            direction = 'mute'
-        elif 'down' in prompt_lower or 'decrease' in prompt_lower or 'lower' in prompt_lower or 'quieter' in prompt_lower:
-            direction = 'down'
-            nums = re.findall(r'\d+', prompt_text)
-            if nums:
-                amount = int(nums[0])
-        elif 'up' in prompt_lower or 'increase' in prompt_lower or 'higher' in prompt_lower or 'louder' in prompt_lower:
-            direction = 'up'
-            nums = re.findall(r'\d+', prompt_text)
-            if nums:
-                amount = int(nums[0])
-        elif 'set' in prompt_lower or 'to' in prompt_lower:
-            nums = re.findall(r'\d+', prompt_text)
-            if nums:
-                direction = str(nums[0])
-                
-        print(json.dumps({"type": "thought", "text": f"System Volume Control: processing '{direction}' adjustment...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn Volume Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_volume",
-            "description": f"🔊 Volume Control: {direction.title() if not direction.isdigit() else direction + '%'}",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "adjust_volume", "args": {"direction": direction, "amount": amount}}), flush=True)
-        volume_res = adjust_volume(direction, amount)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": volume_res}), flush=True)
-        
-        final_reply = (
-            f"🔊 **System Volume Control**\n\n"
-            f"Command: {prompt_text}\n"
-            f"Result: {volume_res} ✅"
-        )
-
-    elif matched_intent == "media_control":
-        # Parse action
-        action = 'play'
-        if 'next' in prompt_lower or 'skip' in prompt_lower or 'forward' in prompt_lower:
-            action = 'next'
-        elif 'prev' in prompt_lower or 'back' in prompt_lower:
-            action = 'prev'
-        elif 'pause' in prompt_lower or 'stop' in prompt_lower:
-            action = 'pause'
-        elif 'play' in prompt_lower or 'resume' in prompt_lower:
-            action = 'play'
-            
-        print(json.dumps({"type": "thought", "text": f"System Media Control: simulating media {action} command...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn Media Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_media",
-            "description": f"🎵 Media Control: {action.title()}",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "adjust_media", "args": {"action": action}}), flush=True)
-        media_res = adjust_media(action)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": media_res}), flush=True)
-        
-        final_reply = (
-            f"🎵 **System Media Control**\n\n"
-            f"Command: {prompt_text}\n"
-            f"Result: {media_res} ✅"
-        )
-
-    else: # qa_search
-        # Search the local documentation database using TF-IDF
-        print(json.dumps({"type": "thought", "text": f"Querying local index for: '{prompt_text}'...\n"}), flush=True)
-        await asyncio.sleep(0.2)
-        
-        # Spawn QA Search Subagent
-        print(json.dumps({
-            "type": "subagent_start",
-            "id": "sub_qa",
-            "description": "Query offline documentation index",
-        }), flush=True)
-        await asyncio.sleep(0.3)
-        
-        # Tool call
-        print(json.dumps({"type": "tool_call", "name": "search_local_docs", "args": {"query": prompt_text}}), flush=True)
-        results = qa_engine.search(prompt_text, top_n=2)
-        await asyncio.sleep(0.4)
-        print(json.dumps({"type": "tool_done", "result": f"Found {len(results)} matches"}), flush=True)
-        
-        # Check if we have pre-defined system knowledge templates for this query
-        matched_template = None
-        for key in ["fitness", "portfolio", "cats", "business", "education", "tech", "machine learning", "ai", "clicky", "edge go", "notch"]:
-            if key in prompt_lower:
-                matched_template = key
-                break
-                
-        if matched_template:
-            content = expand_topic_content(matched_template.title(), prompt_text)
-            final_reply = (
-                f"🧠 **Clicky Offline AI Knowledge Base**\n\n"
-                f"Direct match found for *\"{matched_template.title()}\"* in offline system templates:\n\n"
-                f"{content}"
-            )
-        elif results and results[0][0] > 0.08:
-            print(json.dumps({"type": "thought", "text": "Synthesizing answer based on relevant indexed sections...\n"}), flush=True)
+            print(json.dumps({"type": "thought", "text": f"Launching {app_name.title()}...\n"}), flush=True)
             await asyncio.sleep(0.2)
-            
-            snippets = []
-            for score, doc in results:
-                file_name = doc["metadata"]["file"]
-                text = doc["text"]
-                snippets.append(f"📄 **From [{file_name}](file:///{os.path.join(REPO_ROOT, file_name)})** (Similarity: {score:.2f}):\n\n{text}")
-                
+
+            print(json.dumps({"type": "subagent_start", "id": "sub_ms",
+                              "description": f"Launch Microsoft {app_name.title()}"}), flush=True)
+            await asyncio.sleep(0.3)
+
+            print(json.dumps({"type": "tool_call", "name": "open_microsoft_app",
+                              "args": {"app": app_name, "content": content}}), flush=True)
+            ms_raw = open_microsoft_app(app_name, content)
+            await asyncio.sleep(0.4)
+            ms_data = json.loads(ms_raw)
+            print(json.dumps({"type": "tool_done", "result": ms_data.get('status', ''),
+                              "extra": {"app": ms_data.get('app'), "method": ms_data.get('method')}}), flush=True)
+
             final_reply = (
-                f"🔍 **Offline Knowledge Base Search Results**\n\n"
-                f"Here are the most relevant sections found in the local repository:\n\n" + 
-                "\n\n---\n\n".join(snippets)
-            )
-        else:
-            final_reply = (
-                f"🔍 **Offline Knowledge Base Search**\n\n"
-                f"No highly matching sections found in the local markdown files for *\"{prompt_text}\"*.\n\n"
-                f"Try asking about topics documented in `AGENTS.md` or `README.md` (e.g. *\"how does the overlay work\"*, *\"explain the worker proxy\"*)."
+                f"🖥️ **Microsoft App Launched**\n\n"
+                f"**App:** {ms_data.get('app', app_name.title())}\n"
+                f"**Method:** {ms_data.get('method', 'shell')}\n"
+                f"**Status:** {ms_data.get('status', 'launched')} ✅"
+                + (f"\n**File:** `{ms_data.get('file')}`" if ms_data.get('file') else "")
             )
 
-        chunk_size = 20
-        for i in range(0, len(final_reply), chunk_size):
-            print(json.dumps({"type": "response_chunk", "text": final_reply[i:i+chunk_size]}), flush=True)
-            await asyncio.sleep(0.04)
+        elif matched_intent == "multi_agent":
+            print(json.dumps({"type": "thought", "text": "Analyzing task complexity and planning agent pipeline...\n"}), flush=True)
+            await asyncio.sleep(0.3)
+
+            pipeline = multi_agent_orchestrate(prompt_text)
+            agent_outputs = []
+
+            print(json.dumps({"type": "thought",
+                              "text": f"Spawning {len(pipeline)}-agent pipeline: {' → '.join(t for t, _ in pipeline)}\n"}), flush=True)
+            await asyncio.sleep(0.2)
+
+            for i, (agent_type, task_desc) in enumerate(pipeline):
+                icon, agent_name = SUB_AGENT_TYPES.get(agent_type, ('🤖', agent_type.title()))
+                print(json.dumps({"type": "subagent_start",
+                                  "id": f"sub_{agent_type}_{i}",
+                                  "description": f"{icon} {agent_name}",
+                                  "agent_type": agent_type}), flush=True)
+                await asyncio.sleep(0.4)
+
+                # Simulate agent work
+                if agent_type == 'researcher':
+                    query = re.sub(r'^(research:|find:|look up:?)\s*', '', task_desc, flags=re.I).strip()
+                    print(json.dumps({"type": "tool_call", "name": "web_search",
+                                      "args": {"query": query}}), flush=True)
+                    raw = web_search(query, max_results=3)
+                    data = json.loads(raw)
+                    results = data.get('results', [])
+                    output = f"Found {len(results)} web sources"
+                    agent_outputs.append(f"🔬 Research: {len(results)} sources found for '{query}'")
+                elif agent_type == 'creator':
+                    print(json.dumps({"type": "tool_call", "name": "create_html_page",
+                                      "args": {"title": prompt_text[:40], "body_description": prompt_text}}), flush=True)
+                    raw = create_html_page(prompt_text[:40].title(), prompt_text)
+                    data = json.loads(raw)
+                    output = f"Created: {data.get('file', 'file')}"
+                    agent_outputs.append(f"🎨 Created: `{data.get('file', 'artifact')}`")
+                elif agent_type == 'writer':
+                    print(json.dumps({"type": "tool_call", "name": "create_document",
+                                      "args": {"filename": "agent_report", "content": prompt_text, "doc_type": "md"}}), flush=True)
+                    raw = create_document('agent_report', f"# Task Report\n\n{prompt_text}\n\n*Generated by Clicky Multi-Agent Pipeline*", 'md')
+                    data = json.loads(raw)
+                    output = f"Document: {data.get('file', '')}"
+                    agent_outputs.append(f"✍️ Written: `{data.get('file', 'report.md')}`")
+                elif agent_type == 'executor':
+                    print(json.dumps({"type": "tool_call", "name": "run_command",
+                                      "args": {"CommandLine": "echo Agent task executed"}}), flush=True)
+                    output = run_command("echo Agent task executed")
+                    agent_outputs.append(f"⚡ Executed system task")
+                elif agent_type == 'analyst':
+                    output = "Analysis complete: task parameters validated"
+                    agent_outputs.append(f"📊 Analysis: parameters validated")
+                else:  # reviewer
+                    output = "All agent outputs consolidated"
+                    agent_outputs.append(f"🔍 Review: pipeline consolidated")
+
+                await asyncio.sleep(0.3)
+                print(json.dumps({"type": "tool_done", "result": output}), flush=True)
+
+            final_reply = (
+                f"🤖 **Multi-Agent Pipeline Complete**\n\n"
+                f"**Task:** {prompt_text}\n"
+                f"**Agents Run:** {len(pipeline)}\n\n"
+                f"**Pipeline Results:**\n" +
+                "\n".join(f"  {r}" for r in agent_outputs) +
+                "\n\n✅ All agents finished successfully."
+            )
+
+        elif matched_intent == "volume_control":
+            # Parse direction & amount
+            direction = 'up'
+            amount = 10
+        
+            if 'unmute' in prompt_lower:
+                direction = 'unmute'
+            elif 'mute' in prompt_lower:
+                direction = 'mute'
+            elif 'down' in prompt_lower or 'decrease' in prompt_lower or 'lower' in prompt_lower or 'quieter' in prompt_lower:
+                direction = 'down'
+                nums = re.findall(r'\d+', prompt_text)
+                if nums:
+                    amount = int(nums[0])
+            elif 'up' in prompt_lower or 'increase' in prompt_lower or 'higher' in prompt_lower or 'louder' in prompt_lower:
+                direction = 'up'
+                nums = re.findall(r'\d+', prompt_text)
+                if nums:
+                    amount = int(nums[0])
+            elif 'set' in prompt_lower or 'to' in prompt_lower:
+                nums = re.findall(r'\d+', prompt_text)
+                if nums:
+                    direction = str(nums[0])
+                
+            print(json.dumps({"type": "thought", "text": f"System Volume Control: processing '{direction}' adjustment...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Volume Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_volume",
+                "description": f"🔊 Volume Control: {direction.title() if not direction.isdigit() else direction + '%'}",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "adjust_volume", "args": {"direction": direction, "amount": amount}}), flush=True)
+            volume_res = adjust_volume(direction, amount)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": volume_res}), flush=True)
+        
+            final_reply = (
+                f"🔊 **System Volume Control**\n\n"
+                f"Command: {prompt_text}\n"
+                f"Result: {volume_res} ✅"
+            )
+
+        elif matched_intent == "media_control":
+            # Parse action
+            action = 'play'
+            if 'next' in prompt_lower or 'skip' in prompt_lower or 'forward' in prompt_lower:
+                action = 'next'
+            elif 'prev' in prompt_lower or 'back' in prompt_lower:
+                action = 'prev'
+            elif 'pause' in prompt_lower or 'stop' in prompt_lower:
+                action = 'pause'
+            elif 'play' in prompt_lower or 'resume' in prompt_lower:
+                action = 'play'
             
-        print(json.dumps({"type": "done", "text": final_reply}), flush=True)
+            print(json.dumps({"type": "thought", "text": f"System Media Control: simulating media {action} command...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn Media Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_media",
+                "description": f"🎵 Media Control: {action.title()}",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "adjust_media", "args": {"action": action}}), flush=True)
+            media_res = adjust_media(action)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": media_res}), flush=True)
+        
+            final_reply = (
+                f"🎵 **System Media Control**\n\n"
+                f"Command: {prompt_text}\n"
+                f"Result: {media_res} ✅"
+            )
+
+        else: # qa_search
+            # Search the local documentation database using TF-IDF
+            print(json.dumps({"type": "thought", "text": f"Querying local index for: '{prompt_text}'...\n"}), flush=True)
+            await asyncio.sleep(0.2)
+        
+            # Spawn QA Search Subagent
+            print(json.dumps({
+                "type": "subagent_start",
+                "id": "sub_qa",
+                "description": "Query offline documentation index",
+            }), flush=True)
+            await asyncio.sleep(0.3)
+        
+            # Tool call
+            print(json.dumps({"type": "tool_call", "name": "search_local_docs", "args": {"query": prompt_text}}), flush=True)
+            results = qa_engine.search(prompt_text, top_n=2)
+            await asyncio.sleep(0.4)
+            print(json.dumps({"type": "tool_done", "result": f"Found {len(results)} matches"}), flush=True)
+        
+            # Check if we have pre-defined system knowledge templates for this query
+            matched_template = None
+            for key in ["fitness", "portfolio", "cats", "business", "education", "tech", "machine learning", "ai", "clicky", "edge go", "notch"]:
+                if key in prompt_lower:
+                    matched_template = key
+                    break
+                
+            if matched_template:
+                content = expand_topic_content(matched_template.title(), prompt_text)
+                final_reply = (
+                    f"🧠 **Clicky Offline AI Knowledge Base**\n\n"
+                    f"Direct match found for *\"{matched_template.title()}\"* in offline system templates:\n\n"
+                    f"{content}"
+                )
+            elif results and results[0][0] > 0.08:
+                print(json.dumps({"type": "thought", "text": "Synthesizing answer based on relevant indexed sections...\n"}), flush=True)
+                await asyncio.sleep(0.2)
+            
+                snippets = []
+                for score, doc in results:
+                    file_name = doc["metadata"]["file"]
+                    text = doc["text"]
+                    snippets.append(f"📄 **From [{file_name}](file:///{os.path.join(REPO_ROOT, file_name)})** (Similarity: {score:.2f}):\n\n{text}")
+                
+                final_reply = (
+                    f"🔍 **Offline Knowledge Base Search Results**\n\n"
+                    f"Here are the most relevant sections found in the local repository:\n\n" + 
+                    "\n\n---\n\n".join(snippets)
+                )
+            else:
+                final_reply = (
+                    f"🔍 **Offline Knowledge Base Search**\n\n"
+                    f"No highly matching sections found in the local markdown files for *\"{prompt_text}\"*.\n\n"
+                    f"Try asking about topics documented in `AGENTS.md` or `README.md` (e.g. *\"how does the overlay work\"*, *\"explain the worker proxy\"*)."
+                )
+
+            chunk_size = 20
+            for i in range(0, len(final_reply), chunk_size):
+                print(json.dumps({"type": "response_chunk", "text": final_reply[i:i+chunk_size]}), flush=True)
+                await asyncio.sleep(0.04)
+            
+            print(json.dumps({"type": "done", "text": final_reply}), flush=True)
     except Exception as e:
         err_msg = f"Task execution error: {str(e)}"
         print(json.dumps({"type": "error", "message": err_msg, "traceback": traceback.format_exc()}), flush=True)

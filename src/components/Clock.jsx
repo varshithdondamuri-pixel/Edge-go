@@ -3,9 +3,20 @@ import { useState, useEffect } from 'react'
 export default function Clock({ mini = false, settings = {} }) {
   const [now, setNow] = useState(new Date())
 
+  // Only minutes are ever displayed, so tick on the minute boundary instead of
+  // re-rendering the whole notch once a second.
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(id)
+    let timeoutId = null
+    const scheduleNextTick = () => {
+      const current = new Date()
+      const msToNextMinute = 60000 - (current.getSeconds() * 1000 + current.getMilliseconds())
+      timeoutId = setTimeout(() => {
+        setNow(new Date())
+        scheduleNextTick()
+      }, msToNextMinute)
+    }
+    scheduleNextTick()
+    return () => { if (timeoutId) clearTimeout(timeoutId) }
   }, [])
 
   if (mini) {

@@ -259,6 +259,15 @@ html,body,#root{
     transform 220ms cubic-bezier(0.25,0,0,1);
 }
 
+/* Both views stay in the DOM at opacity 0, so their looping animations
+   (visualizer bars, marquee, charge bolt) kept repainting under the notch's
+   backdrop blur while nothing was visible. Park them while hidden. */
+.notch-bar.expanded .notch-collapsed-view *,
+.notch-bar.merged .notch-collapsed-view *,
+.notch-bar:not(.expanded) .notch-expanded-view * {
+  animation-play-state: paused !important;
+}
+
 
 @keyframes glowPulse{
   0%{box-shadow:var(--shadow-notch),0 0 0 rgba(124,106,247,0)}
@@ -294,16 +303,23 @@ html,body,#root{
 
 /* Visualizer mini */
 .viz-mini{display:flex;align-items:flex-end;gap:2px;height:14px;flex-shrink:0;}
+/* Bars are full height and scaled with a transform: animating `height` ran
+   layout on every frame, inside a backdrop-filtered surface. Same picture,
+   composited instead. */
 .vm-bar{
-  width:3px;background:var(--color-accent);border-radius:2px;
+  width:3px;height:14px;background:var(--color-accent);border-radius:2px;
+  transform-origin:bottom;
   animation:vizMini 0.8s ease-in-out infinite alternate;
 }
 .vm-bar:nth-child(1){animation-delay:0s;}
 .vm-bar:nth-child(2){animation-delay:0.15s;}
 .vm-bar:nth-child(3){animation-delay:0.3s;}
 .vm-bar:nth-child(4){animation-delay:0.1s;}
-@keyframes vizMini{from{height:3px;opacity:0.5}to{height:14px;opacity:1}}
-.viz-mini.paused .vm-bar{height:4px;animation:none;}
+@keyframes vizMini{
+  from{transform:scaleY(0.214);opacity:0.5}
+  to{transform:scaleY(1);opacity:1}
+}
+.viz-mini.paused .vm-bar{transform:scaleY(0.286);animation:none;}
 
 /* Mini track name */
 .mini-track-name{
@@ -464,7 +480,7 @@ html,body,#root{
 /* Visualizer full */
 .visualizer{display:flex;align-items:flex-end;gap:2.5px;height:20px;flex-shrink:0;}
 .viz-bar{
-  width:3px;border-radius:2px;
+  width:3px;height:20px;border-radius:2px;
   background:linear-gradient(to top,var(--color-accent),var(--color-accent-2));
   animation:vizFull 0.55s cubic-bezier(0.45,0,0.55,1) infinite alternate;
   transform-origin: bottom;
@@ -478,13 +494,13 @@ html,body,#root{
 .viz-bar:nth-child(7){animation-delay:0.04s;animation-duration:0.49s}
 .viz-bar:nth-child(8){animation-delay:0.25s;animation-duration:0.60s}
 @keyframes vizFull{
-  0%  {height:3px;opacity:0.5}
-  40% {height:12px;opacity:0.8}
-  100%{height:20px;opacity:1}
+  0%  {transform:scaleY(0.15);opacity:0.5}
+  40% {transform:scaleY(0.6);opacity:0.8}
+  100%{transform:scaleY(1);opacity:1}
 }
 .visualizer.paused .viz-bar{
-  height:4px;animation:none;opacity:0.25;
-  transition:height 400ms cubic-bezier(0.25,0,0,1), opacity 400ms ease;
+  transform:scaleY(0.2);animation:none;opacity:0.25;
+  transition:transform 400ms cubic-bezier(0.25,0,0,1), opacity 400ms ease;
 }
 
 /* Progress bar */

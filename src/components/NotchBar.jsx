@@ -53,16 +53,26 @@ export default function NotchBar({
   const safeMedia = media || {}
   const miniTitle = safeMedia.title || 'No media playing'
 
+  // onClearBanner is re-created by the parent on every render, so keeping it in
+  // the dependency list restarted the dismiss timer on every tick of the media
+  // position clock — the banner then stayed up forever while music played.
+  const onClearBannerRef = useRef(onClearBanner)
+  onClearBannerRef.current = onClearBanner
+
   useEffect(() => {
-    if (sneakPeekBanner) {
-      setActiveBanner(sneakPeekBanner)
-      if (bannerTimer.current) clearTimeout(bannerTimer.current)
-      bannerTimer.current = setTimeout(() => {
-        setActiveBanner(null)
-        onClearBanner?.()
-      }, 3500)
-    }
-  }, [sneakPeekBanner, onClearBanner])
+    if (!sneakPeekBanner) return
+    setActiveBanner(sneakPeekBanner)
+    if (bannerTimer.current) clearTimeout(bannerTimer.current)
+    bannerTimer.current = setTimeout(() => {
+      bannerTimer.current = null
+      setActiveBanner(null)
+      onClearBannerRef.current?.()
+    }, 3500)
+  }, [sneakPeekBanner])
+
+  useEffect(() => () => {
+    if (bannerTimer.current) clearTimeout(bannerTimer.current)
+  }, [])
 
   const isOverlayOpenRef = useRef(isOverlayOpen)
   isOverlayOpenRef.current = isOverlayOpen
